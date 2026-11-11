@@ -131,6 +131,7 @@ async function loadShared() {
       if(data){profiles.push(data);ownProfile=data;localStorage.setItem('revise-own-profile-id',String(data.id));cachedOwnProfileId=String(data.id);}
     }
     syncOwnProfile(); buildMarkers(); document.body.classList.remove('demo-mode');
+    resumePendingAuthAction();
   } catch (error) {
     console.error(error); document.body.classList.add('demo-mode');
     syncOwnProfile(); buildMarkers();
@@ -160,10 +161,10 @@ async function refreshOwnProfile() {
   } catch(error){console.error(error);toast('Je n’arrive pas à charger ta fiche. Vérifie la connexion et la migration Supabase.');return undefined;}
 }
 function showProfileRecoveryMessage() {
+  localStorage.setItem('revise-pending-auth-action',JSON.stringify({action:'profile',at:Date.now()}));
   openAuthDialog('login');
 }
 async function openMyProfile() {
-  if(db&&!currentAuthUser&&hasRecoverableProfileId()){openAuthDialog('login');return;}
   const profile=ownProfile||await refreshOwnProfile();
   if(profile){showProfileDetails(profile);return;}
   if(profile===undefined)return;
@@ -171,6 +172,7 @@ async function openMyProfile() {
   toast('Aucune fiche n’est rattachée à la session active. Pour en créer une, utilise « Créer mon profil ».');
 }
 async function openProfileEditor() {
+  if(db&&(!currentAuthUser||currentAuthUser.is_anonymous)){await requirePermanentAccount('edit-profile');return;}
   if(db&&!currentAuthUser&&hasRecoverableProfileId()){openAuthDialog('login');return;}
   const profile=ownProfile||await refreshOwnProfile();
   if(profile){fillProfileForm(profile);openDialog(profileDialog);return;}
@@ -315,7 +317,7 @@ function placeAvailableOn(date,place) {
   return place.days.includes(days[dayIndex]);
 }
 async function toggleAttendance() {
-  if(db&&!currentAuthUser&&hasRecoverableProfileId()){openAuthDialog('login');return;}
+  if(db&&(!currentAuthUser||currentAuthUser.is_anonymous)){await requirePermanentAccount('attendance',detailPlace?.id);return;}
   if (!ownProfile) {
     const profile=await refreshOwnProfile();
     if(profile===undefined)return;
@@ -342,13 +344,13 @@ function showProfileDetails(profile) {
   const isOwn=Boolean(ownProfile && String(profile.id)===String(ownProfile.id));
   const subjects=Object.entries(profile.subjects||{}).map(([name,level])=>`<span>${escapeHtml(name)} · ${Number(level)}/5</span>`).join('');
   const contact=String(profile.contact||'').trim();
-  const accountRecovery=isOwn&&currentAuthUser?.is_anonymous?'<button class="button button-outline account-recovery" type="button" id="link-profile-email">Protéger ma fiche avec mon e-mail</button><p class="field-help">L’e-mail sert uniquement à retrouver cette fiche après une expiration de session.</p>':'';
+  const accountRecovery=isOwn&&currentAuthUser?.is_anonymous?'<button class="button button-outline account-recovery" type="button" id="link-profile-email">Associer mon e-mail pour continuer</button><p class="field-help">Un e-mail vérifié est nécessaire pour modifier ta fiche et retrouver ton compte. Il reste privé.</p>':'';
   const emailStatus=isOwn&&currentAuthUser?.email?`<p class="field-help">Fiche rattachée à ${escapeHtml(currentAuthUser.email)}.</p>`:'';
   $('#profile-detail-content').innerHTML=`<div class="eyebrow">${isOwn?'MA FICHE':'FICHE ÉTUDIANT·E'}</div><h2>${escapeHtml(profile.nickname)}</h2><p class="detail-address">${Number(profile.age)||'Âge non renseigné'}${Number(profile.age)?' ans':''} · ${escapeHtml(profile.gender||'Non renseigné')} · ${escapeHtml(profile.study||'Formation non renseignée')}</p><div class="detail-facts"><span>📍 ${escapeHtml(profile.area||'Zone non renseignée')}</span><span>${escapeHtml(profile.department||'Département non renseigné')} · ${escapeHtml(departmentNames[profile.department]||'')}</span><span>📅 ${escapeHtml(daysText(profile.days))}</span></div><h3>Matières</h3><div class="detail-subjects">${subjects||'<span>Aucune matière renseignée</span>'}</div>${(profile.groups||[]).length?`<div class="profile-tags">${profile.groups.map(g=>`<i>${escapeHtml(groupLabel(g))}</i>`).join('')}</div>`:''}${profile.needs?`<p class="detail-note">${escapeHtml(profile.needs)}</p>`:''}${contact?`<button class="button button-outline detail-contact" type="button" data-copy="${escapeHtml(contact)}">Copier le contact · ${escapeHtml(contact)}</button>`:'<p class="field-help">Aucun contact renseigné sur cette fiche.</p>'}${accountRecovery}${emailStatus}${isOwn?'<div class="detail-actions"><button class="button button-outline" id="edit-own-profile">Modifier ma fiche</button><button class="text-button danger-text" id="delete-own-profile">Supprimer ma fiche</button></div>':''}`;
   $('#profile-detail-content').querySelector('[data-copy]')?.addEventListener('click',event=>copyContact(event.currentTarget.dataset.copy));
-  $('#edit-own-profile')?.addEventListener('click',()=>{ $('#profile-detail-dialog').close(); fillProfileForm(ownProfile); openDialog(profileDialog); });
+  $('#edit-own-profile')?.addEventListener('click',()=>{ $('#profile-detail-dialog').close(); openProfileEditor(); });
   $('#delete-own-profile')?.addEventListener('click',deleteOwnProfile);
-  $('#link-profile-email')?.addEventListener('click',()=>{ $('#profile-detail-dialog').close();openAuthDialog('link'); });
+  $('#link-profile-email')?.addEventListener('click',()=>{ $('#profile-detail-dialog').close();requirePermanentAccount('profile'); });
   openDialog($('#profile-detail-dialog'));
 }
 function fillProfileForm(profile) {
@@ -372,11 +374,28 @@ function addSubjectField(name='',level=3) {
 async function copyContact(contact) { const value=String(contact||'').trim();if(!value){toast('Aucun contact n’a été renseigné.');return;}try { await navigator.clipboard.writeText(value); toast('Contact copié.'); } catch { toast(`Contact : ${value}`); } }
 
 function authRedirectUrl(){return new URL('./',window.location.href).href;}
+async function requirePermanentAccount(action,placeId='') {
+  if(!db||currentAuthUser?.email&&!currentAuthUser.is_anonymous)return true;
+  localStorage.setItem('revise-pending-auth-action',JSON.stringify({action,placeId,at:Date.now()}));
+  if(currentAuthUser?.is_anonymous)openAuthDialog('link');
+  else openAuthDialog(hasRecoverableProfileId()?'login':'signup');
+  return false;
+}
+function resumePendingAuthAction() {
+  let pending;
+  try{pending=JSON.parse(localStorage.getItem('revise-pending-auth-action')||'null');}catch{}
+  if(!pending||Date.now()-Number(pending.at)>30*60*1000||currentAuthUser?.is_anonymous||!currentAuthUser?.email)return;
+  localStorage.removeItem('revise-pending-auth-action');
+  if(pending.action==='host')startHostProposal();
+  else if(pending.action==='attendance'){const place=places.find(item=>String(item.id)===String(pending.placeId));if(place)showPlaceDetails(place);}
+  else if(pending.action==='profile')openMyProfile();
+  else if(pending.action==='edit-profile')openProfileEditor();
+}
 function openAuthDialog(flow='login') {
   authDialog.dataset.flow=flow;
-  $('#auth-title').textContent=flow==='link'?'Protéger ma fiche':'Se connecter à ma fiche';
-  $('#auth-intro').textContent=flow==='link'?'On t’enverra un lien de vérification pour rattacher cet e-mail à ta fiche. Tu pourras ensuite retrouver la même fiche après expiration de session.':'Saisis l’e-mail associé à ta fiche. Un lien de connexion t’y sera envoyé, sans créer de nouveau compte.';
-  $('#auth-submit').textContent=flow==='link'?'Envoyer le lien de vérification':'Envoyer le lien de connexion';
+  $('#auth-title').textContent=flow==='link'?'Associer un e-mail à ta fiche':flow==='signup'?'Créer ton accès':'Se connecter à ma fiche';
+  $('#auth-intro').textContent=flow==='link'?'Un lien de vérification sera envoyé. L’e-mail est obligatoire pour modifier ta fiche et te reconnecter.':flow==='signup'?'Saisis ton e-mail. Un lien de vérification sera envoyé avant de créer ta fiche.':'Saisis l’e-mail associé à ta fiche. Un lien de connexion t’y sera envoyé.';
+  $('#auth-submit').textContent=flow==='link'?'Envoyer le lien de vérification':flow==='signup'?'Créer mon accès par e-mail':'Envoyer le lien de connexion';
   $('#auth-email').value=flow==='link'?(currentAuthUser?.email||''):'';
   openDialog(authDialog);
 }
@@ -396,7 +415,7 @@ function wireDialogs() {
 }
 async function startHostProposal() {
   selectedHostResult=null;$('#host-form').reset();
-  if(db&&!currentAuthUser&&hasRecoverableProfileId()){openAuthDialog('login');return;}
+  if(db&&(!currentAuthUser||currentAuthUser.is_anonymous)){await requirePermanentAccount('host');return;}
   const profile=ownProfile||await refreshOwnProfile();
   if(profile===undefined)return;
   if(!profile){if(hasRecoverableProfileId()){showProfileRecoveryMessage();return;}pendingHostAfterProfile=true;toast('Crée ta fiche une seule fois avant de proposer un lieu.');fillProfileForm(null);openDialog(profileDialog);return;}
@@ -405,6 +424,7 @@ async function startHostProposal() {
 
 $('#host-form').addEventListener('submit',async event=>{
   event.preventDefault();const form=event.currentTarget,fd=new FormData(form),address=String(fd.get('address')).trim();
+  if(db&&(!currentAuthUser?.email||currentAuthUser.is_anonymous)){hostDialog.close();await requirePermanentAccount('host');return;}
   if(!ownProfile){hostDialog.close();startHostProposal();return;}
   if(!fd.getAll('days').length){toast('Indique au moins un jour de disponibilité.');return;}
   const item=selectedHostResult;
@@ -420,6 +440,7 @@ $('#host-form').addEventListener('submit',async event=>{
 
 $('#profile-form').addEventListener('submit',async event=>{
   event.preventDefault();const form=event.currentTarget,fd=new FormData(form),subjects={};
+  if(db&&(!currentAuthUser?.email||currentAuthUser.is_anonymous)){profileDialog.close();await requirePermanentAccount(editingProfileId?'edit-profile':'create-profile');return;}
   $('#subject-fields').querySelectorAll('.subject-input-row').forEach(row=>{const name=row.querySelector('.subject-name').value.trim(),level=Number(row.querySelector('input:checked')?.value||3);if(name)subjects[name]=level;});
   const profile={nickname:String(fd.get('nickname')).trim(),age:Number(fd.get('age')),gender:String(fd.get('gender')),study:String(fd.get('study')).trim(),department:String(fd.get('department')),area:String(fd.get('area')).trim(),days:fd.getAll('days'),subjects,groups:fd.getAll('groups'),needs:String(fd.get('needs')).trim(),contact:String(fd.get('contact')).trim(),published:true};
   try {
@@ -445,9 +466,10 @@ $('#auth-form').addEventListener('submit',async event=>{
       if(error)throw error;
       authDialog.close();toast(`Lien de vérification envoyé à ${email}.`);
     } else {
-      const {error}=await db.auth.signInWithOtp({email,options:{shouldCreateUser:false,emailRedirectTo:authRedirectUrl()}});
+      const isSignup=authDialog.dataset.flow==='signup';
+      const {error}=await db.auth.signInWithOtp({email,options:{shouldCreateUser:isSignup,emailRedirectTo:authRedirectUrl()}});
       if(error)throw error;
-      authDialog.close();toast(`Si une fiche est associée à cet e-mail, un lien de connexion a été envoyé à ${email}.`);
+      authDialog.close();toast(isSignup?`Vérifie ${email} avec le lien reçu ; tu pourras ensuite créer ta fiche.`:`Si une fiche est associée à cet e-mail, un lien de connexion a été envoyé à ${email}.`);
     }
   } catch(error){console.error(error);toast(error.message||'Impossible d’envoyer le lien. Vérifie le fournisseur e-mail dans Supabase.');}
 });

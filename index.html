@@ -92,7 +92,7 @@
     <label class="consent"><input type="checkbox" name="consent" required><span>Je confirme avoir le droit de proposer ce lieu et j’accepte que ses informations soient visibles publiquement.</span></label>
     <button class="button button-coral modal-submit" type="submit">Publier le lieu <span>→</span></button><p class="privacy-note">Les lieux et contacts publiés sont visibles publiquement.</p></form></dialog>
 
-  <dialog id="profile-dialog" class="modal"><form id="profile-form" method="dialog"><button class="modal-close" type="button" data-close aria-label="Fermer">×</button><div class="eyebrow">FAIS TA FICHE</div><h2 id="profile-form-title">Les révisions, à ta façon.</h2><p class="modal-intro">Choisis un pseudo et indique les infos que tu souhaites partager.</p>
+  <dialog id="profile-dialog" class="modal"><form id="profile-form" method="dialog"><button class="modal-close" type="button" data-close aria-label="Fermer">×</button><div class="eyebrow">FAIS TA FICHE</div><h2 id="profile-form-title">Les révisions, à ta façon.</h2><p class="modal-intro">Choisis un pseudo et indique les infos que tu souhaites partager.</p><p class="field-help">Un e-mail vérifié est nécessaire pour créer ou modifier ta fiche. Il reste privé et n’apparaît jamais sur ton profil.</p>
     <label>Ton prénom ou pseudo<input name="nickname" required maxlength="40" placeholder="Ex. Samira"></label><label>Âge<input name="age" type="number" required min="15" max="99" placeholder="Ex. 21"></label>
     <label>Genre<select name="gender" required><option value="">Choisir…</option><option value="F">F</option><option value="M">M</option><option value="Non binaire">Non binaire</option><option value="Non renseigné">Non renseigné</option></select></label>
     <label>Ta formation (facultatif)<input name="study" maxlength="80" placeholder="Ex. Licence de psychologie"></label><label>Département<select name="department" required><option value="">Choisir…</option><option value="75">75 · Paris</option><option value="92">92 · Hauts-de-Seine</option><option value="93">93 · Seine-Saint-Denis</option><option value="94">94 · Val-de-Marne</option><option value="77">77 · Seine-et-Marne</option><option value="78">78 · Yvelines</option><option value="91">91 · Essonne</option><option value="95">95 · Val-d’Oise</option></select></label><label>Quartier ou commune<input name="area" required maxlength="60" placeholder="Ex. Paris 5e ou Nanterre"></label>
@@ -112,6 +112,6 @@
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <script src="config.js"></script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-  <script type="module" src="app.js?v=20261111-account-recovery"></script>
+  <script type="module" src="app.js?v=20261111-email-required"></script>
 </body>
 </html>

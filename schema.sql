@@ -93,6 +93,20 @@ as $$ select exists(select 1 from public.profiles p where p.owner_id = (select a
 revoke all on function public.has_owned_profile() from public, anon;
 grant execute on function public.has_owned_profile() to authenticated;
 
+create or replace function public.has_verified_email()
+returns boolean
+language sql stable security definer set search_path = ''
+as $$
+  select exists (
+    select 1 from auth.users u
+    where u.id = (select auth.uid())
+      and u.email is not null
+      and u.email_confirmed_at is not null
+  )
+$$;
+revoke all on function public.has_verified_email() from public, anon;
+grant execute on function public.has_verified_email() to authenticated;
+
 alter table public.places enable row level security;
 alter table public.profiles enable row level security;
 alter table public.place_attendance enable row level security;
@@ -111,10 +125,10 @@ create policy "Published places are public" on public.places
   for select using (published = true);
 drop policy if exists "Owners can add places" on public.places;
 create policy "Owners can add places" on public.places
-  for insert to authenticated with check (auth.uid() = owner_id and published = true and public.has_owned_profile());
+  for insert to authenticated with check (public.has_verified_email() and auth.uid() = owner_id and published = true and public.has_owned_profile());
 drop policy if exists "Owners can edit places" on public.places;
 create policy "Owners can edit places" on public.places
-  for update to authenticated using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
+  for update to authenticated using (public.has_verified_email() and auth.uid() = owner_id) with check (public.has_verified_email() and auth.uid() = owner_id);
 drop policy if exists "Owners can delete places" on public.places;
 create policy "Owners can delete places" on public.places
   for delete to authenticated using (auth.uid() = owner_id);
@@ -133,10 +147,10 @@ create policy "Profiles visible by context" on public.profiles
   );
 drop policy if exists "Owners can add profiles" on public.profiles;
 create policy "Owners can add profiles" on public.profiles
-  for insert to authenticated with check (auth.uid() = owner_id and published = true and not public.has_owned_profile());
+  for insert to authenticated with check (public.has_verified_email() and auth.uid() = owner_id and published = true and not public.has_owned_profile());
 drop policy if exists "Owners can edit profiles" on public.profiles;
 create policy "Owners can edit profiles" on public.profiles
-  for update to authenticated using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
+  for update to authenticated using (public.has_verified_email() and auth.uid() = owner_id) with check (public.has_verified_email() and auth.uid() = owner_id);
 drop policy if exists "Owners can delete profiles" on public.profiles;
 create policy "Owners can delete profiles" on public.profiles
   for delete to authenticated using (auth.uid() = owner_id);
@@ -146,7 +160,7 @@ create policy "Attendance is public" on public.place_attendance
   for select using (true);
 drop policy if exists "Members can mark their attendance" on public.place_attendance;
 create policy "Members can mark their attendance" on public.place_attendance
-  for insert to authenticated with check (auth.uid() = owner_id);
+  for insert to authenticated with check (public.has_verified_email() and auth.uid() = owner_id);
 drop policy if exists "Members can cancel their attendance" on public.place_attendance;
 create policy "Members can cancel their attendance" on public.place_attendance
   for delete to authenticated using (auth.uid() = owner_id);
