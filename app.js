@@ -158,7 +158,7 @@ async function openMyProfile() {
   if(profile){showProfileDetails(profile);return;}
   if(profile===undefined)return;
   if(hasRecoverableProfileId()){showProfileRecoveryMessage();return;}
-  fillProfileForm(null);openDialog(profileDialog);
+  toast('Aucune fiche n’est rattachée à la session active. Pour en créer une, utilise « Créer mon profil ».');
 }
 async function openProfileEditor() {
   const profile=ownProfile||await refreshOwnProfile();
