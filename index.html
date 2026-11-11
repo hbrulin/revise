@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
-  <link rel="stylesheet" href="styles.css?v=20261111-account-recovery">
+  <link rel="stylesheet" href="styles.css?v=20261111-place-events">
 </head>
 <body>
   <header class="topbar">
@@ -53,6 +53,8 @@
       <label class="search-field autocomplete-wrap"><span class="search-symbol">⌕</span><input id="search-input" type="search" placeholder="Matière, quartier, lieu…" aria-label="Rechercher une matière, un quartier ou un lieu public" autocomplete="off"><div class="autocomplete-list" id="search-suggestions" role="listbox" hidden></div></label>
       <div class="strip-divider"></div>
       <label class="select-field"><span class="field-mini-label">ZONE</span><select id="area-select" aria-label="Zone"><option value="all">Toute l’Île-de-France</option><option value="75">Paris intramuros</option><option value="around">Départements autour de Paris</option></select></label>
+      <label class="select-field"><span class="field-mini-label">JOUR</span><select id="day-filter" aria-label="Filtrer par jour de la semaine"><option value="">Tous les jours</option><option>Lun</option><option>Mar</option><option>Mer</option><option>Jeu</option><option>Ven</option><option>Sam</option><option>Dim</option></select></label>
+      <label class="select-field date-filter"><span class="field-mini-label">DATE</span><input id="search-date" type="date" aria-label="Filtrer par date"></label>
       <label class="select-field department-filter" id="department-filter" hidden><span class="field-mini-label">DÉPARTEMENT</span><select id="department-select" aria-label="Département autour de Paris"><option value="all">Tous autour de Paris</option><option value="92">92 · Hauts-de-Seine</option><option value="93">93 · Seine-Saint-Denis</option><option value="94">94 · Val-de-Marne</option><option value="77">77 · Seine-et-Marne</option><option value="78">78 · Yvelines</option><option value="91">91 · Essonne</option><option value="95">95 · Val-d’Oise</option></select></label>
       <button class="button button-coral" id="search-button">Rechercher <span aria-hidden="true">→</span></button>
     </section>
@@ -81,16 +83,18 @@
   </main>
   <footer><a class="brand footer-brand" href="#"><span class="brand-icon">r<span>.</span></span><span class="brand-name">révise<span>ensemble</span></span></a><span>Fait pour apprendre ensemble, partout.</span><a href="README.md">À propos & confidentialité</a></footer>
 
-  <dialog id="host-dialog" class="modal"><form id="host-form" method="dialog"><button class="modal-close" type="button" data-close aria-label="Fermer">×</button><div class="eyebrow">PARTAGER UN ENDROIT</div><h2>Un lieu pour réviser ?</h2><p class="modal-intro">Cherche un lieu public existant (bibliothèque, café, lieu d’étude) et choisis une suggestion.</p>
-    <label>Lieu<input name="name" required maxlength="80" placeholder="Ex. Bibliothèque, café…"></label>
+  <dialog id="host-dialog" class="modal"><form id="host-form" method="dialog"><button class="modal-close" type="button" data-close aria-label="Fermer">×</button><div class="eyebrow">PARTAGER UN ENDROIT</div><h2 id="place-form-title">Un lieu pour réviser ?</h2><p class="modal-intro" id="place-form-intro">Cherche un lieu public existant (bibliothèque, café, lieu d’étude) et choisis une suggestion.</p>
+    <label>Nom du lieu ou de l’événement<input name="name" required maxlength="80" placeholder="Ex. Bibliothèque, café, atelier de révision…"></label>
     <label class="autocomplete-wrap">Lieu public et adresse<input id="place-address" name="address" required maxlength="160" placeholder="Tape un nom puis choisis un lieu dans la liste" autocomplete="off"><div class="autocomplete-list" id="place-suggestions" role="listbox" hidden></div></label>
     <input type="hidden" name="lat"><input type="hidden" name="lng"><input type="hidden" name="department">
     <div class="form-grid"><label>Capacité<select name="capacity" required><option value="2">2 personnes</option><option value="4" selected>4 personnes</option><option value="6">6 personnes</option><option value="8">8 personnes</option><option value="12">12 personnes</option><option value="20">20 personnes</option></select></label><label>Type de lieu<select name="kind"><option>Café</option><option>Bibliothèque</option><option>Salle associative</option><option>Lieu universitaire</option><option>Autre</option></select></label></div>
-    <fieldset><legend>Jours où le lieu est disponible</legend><div class="day-options"><label class="check-pill"><input type="checkbox" name="days" value="Lun"><span>Lun</span></label><label class="check-pill"><input type="checkbox" name="days" value="Mar"><span>Mar</span></label><label class="check-pill"><input type="checkbox" name="days" value="Mer"><span>Mer</span></label><label class="check-pill"><input type="checkbox" name="days" value="Jeu"><span>Jeu</span></label><label class="check-pill"><input type="checkbox" name="days" value="Ven"><span>Ven</span></label><label class="check-pill"><input type="checkbox" name="days" value="Sam"><span>Sam</span></label><label class="check-pill"><input type="checkbox" name="days" value="Dim"><span>Dim</span></label></div></fieldset>
+    <label>Format<select name="occurrence" id="place-occurrence"><option value="recurring">Lieu disponible chaque semaine</option><option value="once">Événement ponctuel · une seule date</option></select></label>
+    <fieldset id="recurring-days"><legend>Jours où le lieu est disponible</legend><div class="day-options"><label class="check-pill"><input type="checkbox" name="days" value="Lun"><span>Lun</span></label><label class="check-pill"><input type="checkbox" name="days" value="Mar"><span>Mar</span></label><label class="check-pill"><input type="checkbox" name="days" value="Mer"><span>Mer</span></label><label class="check-pill"><input type="checkbox" name="days" value="Jeu"><span>Jeu</span></label><label class="check-pill"><input type="checkbox" name="days" value="Ven"><span>Ven</span></label><label class="check-pill"><input type="checkbox" name="days" value="Sam"><span>Sam</span></label><label class="check-pill"><input type="checkbox" name="days" value="Dim"><span>Dim</span></label></div></fieldset>
+    <label id="one-time-date-field" hidden>Date de l’événement<input type="date" name="event_date" id="place-event-date"></label>
     <label>Contact public du lieu <span class="optional">facultatif</span><input name="contact" maxlength="100" placeholder="Ex. @asso sur une messagerie"></label><p class="field-help">N’indique pas de numéro personnel ni d’adresse e-mail privée.</p>
     <label>Quelques précisions<textarea name="note" maxlength="260" placeholder="Horaires, accessibilité, ambiance, conditions d’accès…"></textarea></label>
     <label class="consent"><input type="checkbox" name="consent" required><span>Je confirme avoir le droit de proposer ce lieu et j’accepte que ses informations soient visibles publiquement.</span></label>
-    <button class="button button-coral modal-submit" type="submit">Publier le lieu <span>→</span></button><p class="privacy-note">Les lieux et contacts publiés sont visibles publiquement.</p></form></dialog>
+    <button class="button button-coral modal-submit" id="place-form-submit" type="submit">Publier le lieu <span>→</span></button><p class="privacy-note">Les lieux et contacts publiés sont visibles publiquement.</p></form></dialog>
 
   <dialog id="profile-dialog" class="modal"><form id="profile-form" method="dialog"><button class="modal-close" type="button" data-close aria-label="Fermer">×</button><div class="eyebrow">FAIS TA FICHE</div><h2 id="profile-form-title">Les révisions, à ta façon.</h2><p class="modal-intro">Choisis un pseudo et indique les infos que tu souhaites partager.</p><p class="field-help">Un e-mail vérifié est nécessaire pour créer ou modifier ta fiche. Il reste privé et n’apparaît jamais sur ton profil.</p>
     <label>Ton prénom ou pseudo<input name="nickname" required maxlength="40" placeholder="Ex. Samira"></label><label>Âge<input name="age" type="number" required min="15" max="99" placeholder="Ex. 21"></label>
@@ -112,6 +116,6 @@
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <script src="config.js"></script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-  <script type="module" src="app.js?v=20261111-email-required"></script>
+  <script type="module" src="app.js?v=20261111-place-events"></script>
 </body>
 </html>

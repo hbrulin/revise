@@ -24,7 +24,7 @@ const demoProfiles = [
 let places = [...demoPlaces], profiles = [...demoProfiles], markers = new Map();
 let searchMarker = null, searchTimer = null, placeTimer = null, searchAbort = null, placeAbort = null;
 const photonCache = new Map();
-let selectedHostResult = null, currentUserId = null, currentAuthUser = null, ownProfile = null, editingProfileId = null, detailPlace = null, currentAttendances = [];
+let selectedHostResult = null, currentUserId = null, currentAuthUser = null, ownProfile = null, editingProfileId = null, editingPlaceId = null, detailPlace = null, currentAttendances = [];
 let demoAttendances = [];
 let pendingHostAfterProfile = false, pendingAttendanceAfterProfile = false;
 let cachedOwnProfileId = localStorage.getItem('revise-own-profile-id');
@@ -74,14 +74,22 @@ function featureData(feature) {
   const props = feature.properties || {};
   return {name:props.name || props.street || 'Lieu public',address:photonAddress(props),lat:Number(feature.geometry.coordinates[1]),lng:Number(feature.geometry.coordinates[0]),department:featureDepartment(props),osmId:props.osm_id,osmType:props.osm_type};
 }
+const weekDays=['Dim','Lun','Mar','Mer','Jeu','Ven','Sam'];
+function localToday(){const now=new Date();return `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;}
+function weekdayForDate(date){return date?weekDays[new Date(`${date}T12:00:00`).getDay()]||'':'';}
+function dateText(date){return date?new Date(`${date}T12:00:00`).toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long',year:'numeric'}):'Date à préciser';}
+function placeScheduleText(place){return place.one_time?`Une fois · ${dateText(place.event_date)}`:daysText(place.days);}
 function visiblePlaces() {
   const q = normalizedText($('#search-input').value.trim()), scope = $('#area-select').value, department = $('#department-select').value;
+  const filterDate=$('#search-date').value,filterDay=$('#day-filter').value,today=localToday();
   return places.filter(place => {
     const dept = placeDepartment(place);
     const scopeOk = scope === 'all' || (scope === '75' && dept === '75') || (scope === 'around' && nearParis.has(dept));
     const deptOk = scope !== 'around' || department === 'all' || dept === department;
     const textOk = !q || normalizedText(`${place.name} ${place.address} ${place.kind} ${place.note || ''}`).includes(q);
-    return scopeOk && deptOk && textOk;
+    const notExpired=!place.one_time||Boolean(place.event_date&&place.event_date>=today);
+    const scheduleOk=filterDate?placeAvailableOn(filterDate,place):filterDay?(place.one_time?weekdayForDate(place.event_date)===filterDay:(place.days||[]).includes(filterDay)):true;
+    return scopeOk && deptOk && textOk && notExpired && scheduleOk;
   });
 }
 function groupLabel(group) {
@@ -90,7 +98,7 @@ function groupLabel(group) {
 function renderPlaces() {
   const list = $('#place-list'), shown = visiblePlaces();
   $('#map-count').textContent = `${shown.length} lieu${shown.length > 1 ? 'x' : ''}`;
-  list.innerHTML = shown.length ? shown.map(place => `<button class="place-card" data-place="${escapeHtml(place.id)}"><span class="place-type-icon">${place.kind === 'Bibliothèque' ? '▤' : place.kind === 'Café' ? '☕' : '⌂'}</span><span class="place-card-copy"><b>${escapeHtml(place.name)}</b><small>${escapeHtml(place.address)}</small><span class="place-meta">👥 ${place.capacity} places <i>·</i> 📅 ${escapeHtml(daysText(place.days))}</span></span><span class="card-arrow">↗</span></button>`).join('') : '<div class="empty-state">Aucun lieu avec ces filtres. Essaie une autre zone ou propose le tien ✨</div>';
+  list.innerHTML = shown.length ? shown.map(place => `<button class="place-card" data-place="${escapeHtml(place.id)}"><span class="place-type-icon">${place.one_time?'✦':place.kind === 'Bibliothèque' ? '▤' : place.kind === 'Café' ? '☕' : '⌂'}</span><span class="place-card-copy"><b>${escapeHtml(place.name)}</b><small>${escapeHtml(place.address)}</small><span class="place-meta">👥 ${place.capacity} places <i>·</i> 📅 ${escapeHtml(placeScheduleText(place))}</span></span><span class="card-arrow">↗</span></button>`).join('') : '<div class="empty-state">Aucun lieu avec ces filtres. Essaie une autre zone ou propose le tien ✨</div>';
   for (const [id,marker] of markers) {
     if (shown.some(item => String(item.id) === id)) marker.addTo(map);
     else marker.remove();
@@ -243,6 +251,13 @@ function showPublicResult(feature) {
   map.flyTo([item.lat,item.lng],16,{duration:.5});
   $('#search-suggestions').hidden = true; $('#search-input').value = item.name;
 }
+function syncOccurrenceFields() {
+  const oneTime=$('#place-occurrence').value==='once';
+  $('#recurring-days').hidden=oneTime;
+  $('#one-time-date-field').hidden=!oneTime;
+  $('#place-event-date').required=oneTime;
+  $('#place-event-date').min=localToday();
+}
 function setupSearch() {
   attachAutocomplete($('#search-input'),$('#search-suggestions'),showPublicResult,'main');
   attachAutocomplete($('#place-address'),$('#place-suggestions'),feature => {
@@ -258,6 +273,11 @@ function setupSearch() {
   $('#search-input').addEventListener('keydown',event => { if (event.key==='Enter') { event.preventDefault(); $('#search-suggestions').hidden=true; renderPlaces(); } });
   $('#area-select').addEventListener('change',() => { $('#department-filter').hidden=$('#area-select').value!=='around'; renderPlaces(); });
   $('#department-select').addEventListener('change',renderPlaces);
+  $('#day-filter').addEventListener('change',()=>{if($('#day-filter').value)$('#search-date').value='';renderPlaces();});
+  $('#search-date').min=localToday();
+  $('#search-date').addEventListener('change',()=>{if($('#search-date').value)$('#day-filter').value='';renderPlaces();});
+  $('#place-occurrence').addEventListener('change',syncOccurrenceFields);
+  syncOccurrenceFields();
 }
 
 function showPlaceDetails(place) {
@@ -265,10 +285,16 @@ function showPlaceDetails(place) {
   detailPlace=place;
   const placeContact=String(place.contact||'').trim();
   const detail=$('#place-detail-content');
-  detail.innerHTML=`<div class="eyebrow">${escapeHtml(place.kind || 'LIEU DE RÉVISION')}</div><h2>${escapeHtml(place.name)}</h2><p class="detail-address">${escapeHtml(place.address)}</p><div class="detail-facts"><span>👥 ${Number(place.capacity)} places</span><span>📅 ${escapeHtml(daysText(place.days))}</span>${placeDepartment(place)?`<span>📍 ${escapeHtml(placeDepartment(place))} · ${escapeHtml(departmentNames[placeDepartment(place)])}</span>`:''}</div><div id="place-owner" class="place-owner"></div><p class="detail-note">${escapeHtml(place.note || 'Pas de précision renseignée.')}</p>${placeContact?`<button class="button button-outline detail-contact" type="button" data-copy="${escapeHtml(placeContact)}">Contacter le lieu · ${escapeHtml(placeContact)}</button>`:'<p class="field-help">Aucun contact n’a été renseigné pour ce lieu.</p>'}<hr><h3>Signaler ta présence</h3><label class="date-label">Choisir une date<input id="attendance-date" type="date" min="${new Date().toISOString().slice(0,10)}" value="${new Date(Date.now()+86400000).toISOString().slice(0,10)}"></label><div id="attendance-summary" class="attendance-summary"></div><button id="attendance-action" class="button button-coral modal-submit" type="button">Je serai présent·e ce jour-là</button><p class="privacy-note">Les présences à cette date et les fiches des inscrit·es sont visibles aux personnes qui consultent ce lieu.</p>`;
+  const owned=place.owner_id&&currentUserId&&String(place.owner_id)===String(currentUserId);
+  const tomorrow=new Date(Date.now()+86400000).toISOString().slice(0,10);
+  const initialDate=place.one_time&&place.event_date>=localToday()?place.event_date:tomorrow;
+  const dateMax=place.one_time?`max="${escapeHtml(place.event_date||'')}"`:'';
+  detail.innerHTML=`<div class="eyebrow">${place.one_time?'ÉVÉNEMENT PONCTUEL':escapeHtml(place.kind || 'LIEU DE RÉVISION')}</div><h2>${escapeHtml(place.name)}</h2><p class="detail-address">${escapeHtml(place.address)}</p><div class="detail-facts"><span>👥 ${Number(place.capacity)} places</span><span>📅 ${escapeHtml(placeScheduleText(place))}</span>${placeDepartment(place)?`<span>📍 ${escapeHtml(placeDepartment(place))} · ${escapeHtml(departmentNames[placeDepartment(place)])}</span>`:''}</div>${owned?'<div class="detail-actions place-owner-actions"><button class="button button-outline" id="edit-own-place" type="button">Modifier ce lieu</button><button class="text-button danger-text" id="delete-own-place" type="button">Supprimer</button></div>':''}<div id="place-owner" class="place-owner"></div><p class="detail-note">${escapeHtml(place.note || 'Pas de précision renseignée.')}</p>${placeContact?`<button class="button button-outline detail-contact" type="button" data-copy="${escapeHtml(placeContact)}">Contacter le lieu · ${escapeHtml(placeContact)}</button>`:'<p class="field-help">Aucun contact n’a été renseigné pour ce lieu.</p>'}<hr><h3>Signaler ta présence</h3><label class="date-label">Choisir une date<input id="attendance-date" type="date" min="${localToday()}" ${dateMax} value="${initialDate}"></label><div id="attendance-summary" class="attendance-summary"></div><button id="attendance-action" class="button button-coral modal-submit" type="button">Je serai présent·e ce jour-là</button><p class="privacy-note">Les présences à cette date et les fiches des inscrit·es sont visibles aux personnes qui consultent ce lieu.</p>`;
   detail.querySelector('[data-copy]')?.addEventListener('click',event=>copyContact(event.currentTarget.dataset.copy));
   detail.querySelector('#attendance-date').addEventListener('change',renderAttendance);
   detail.querySelector('#attendance-action').addEventListener('click',toggleAttendance);
+  detail.querySelector('#edit-own-place')?.addEventListener('click',()=>startPlaceEdit(place));
+  detail.querySelector('#delete-own-place')?.addEventListener('click',()=>deleteOwnedPlace(place));
   openDialog($('#place-detail-dialog')); renderAttendance(); loadPlaceOwnerProfile(place);
 }
 function cacheProfile(profile) {
@@ -312,9 +338,10 @@ async function renderAttendance() {
   } catch(error) { console.error(error); summary.textContent='Présences indisponibles : exécute la migration Supabase de schema.sql.'; action.disabled=true; }
 }
 function placeAvailableOn(date,place) {
-  if(!date||!place?.days?.length)return false;
-  const dayIndex=new Date(`${date}T12:00:00`).getDay(),days=['Dim','Lun','Mar','Mer','Jeu','Ven','Sam'];
-  return place.days.includes(days[dayIndex]);
+  if(!date||!place)return false;
+  if(place.one_time)return date===place.event_date;
+  if(!place.days?.length)return false;
+  return place.days.includes(weekdayForDate(date));
 }
 async function toggleAttendance() {
   if(db&&(!currentAuthUser||currentAuthUser.is_anonymous)){await requirePermanentAccount('attendance',detailPlace?.id);return;}
@@ -388,6 +415,7 @@ function resumePendingAuthAction() {
   localStorage.removeItem('revise-pending-auth-action');
   if(pending.action==='host')startHostProposal();
   else if(pending.action==='attendance'){const place=places.find(item=>String(item.id)===String(pending.placeId));if(place)showPlaceDetails(place);}
+  else if(pending.action==='edit-place'){const place=places.find(item=>String(item.id)===String(pending.placeId));if(place)startPlaceEdit(place);}
   else if(pending.action==='profile')openMyProfile();
   else if(pending.action==='edit-profile')openProfileEditor();
 }
@@ -415,6 +443,9 @@ function wireDialogs() {
 }
 async function startHostProposal() {
   selectedHostResult=null;$('#host-form').reset();
+  editingPlaceId=null;
+  $('#place-form-title').textContent='Un lieu pour réviser ?';$('#place-form-submit').innerHTML='Publier le lieu <span>→</span>';
+  syncOccurrenceFields();
   if(db&&(!currentAuthUser||currentAuthUser.is_anonymous)){await requirePermanentAccount('host');return;}
   const profile=ownProfile||await refreshOwnProfile();
   if(profile===undefined)return;
@@ -422,19 +453,46 @@ async function startHostProposal() {
   pendingHostAfterProfile=false;openDialog(hostDialog);
 }
 
+async function startPlaceEdit(place) {
+  $('#place-detail-dialog').close();
+  if(!place?.owner_id||String(place.owner_id)!==String(currentUserId)){toast('Tu peux modifier uniquement les lieux que tu as proposés.');return;}
+  if(db&&(!currentAuthUser?.email||currentAuthUser.is_anonymous)){await requirePermanentAccount('edit-place',place.id);return;}
+  editingPlaceId=place.id;selectedHostResult={name:place.name,address:place.address,lat:Number(place.lat),lng:Number(place.lng),department:placeDepartment(place)};
+  const form=$('#host-form');form.reset();
+  form.elements.name.value=place.name;form.elements.address.value=place.address;form.elements.lat.value=place.lat;form.elements.lng.value=place.lng;form.elements.department.value=placeDepartment(place);form.elements.capacity.value=String(place.capacity);form.elements.kind.value=place.kind||'Autre';form.elements.occurrence.value=place.one_time?'once':'recurring';form.elements.event_date.value=place.event_date||'';form.elements.contact.value=place.contact||'';form.elements.note.value=place.note||'';
+  form.querySelectorAll('[name="days"]').forEach(input=>input.checked=(place.days||[]).includes(input.value));
+  $('#place-form-title').textContent='Modifier ce lieu';$('#place-form-submit').innerHTML='Enregistrer les changements <span>→</span>';syncOccurrenceFields();openDialog(hostDialog);
+}
+
+async function deleteOwnedPlace(place) {
+  if(!place?.owner_id||String(place.owner_id)!==String(currentUserId)){toast('Tu peux supprimer uniquement les lieux que tu as proposés.');return;}
+  if(!confirm(`Supprimer « ${place.name} » et ses présences ? Cette action est définitive.`))return;
+  try {
+    if(db){const {error}=await db.from('places').delete().eq('id',place.id).eq('owner_id',currentUserId);if(error)throw error;}
+    places=places.filter(item=>String(item.id)!==String(place.id));
+    if(detailPlace&&String(detailPlace.id)===String(place.id))detailPlace=null;
+    $('#place-detail-dialog').close();buildMarkers();toast('Lieu supprimé.');
+  } catch(error){console.error(error);toast('Impossible de supprimer ce lieu. Vérifie que tu en es bien la personne propriétaire.');}
+}
+
 $('#host-form').addEventListener('submit',async event=>{
   event.preventDefault();const form=event.currentTarget,fd=new FormData(form),address=String(fd.get('address')).trim();
   if(db&&(!currentAuthUser?.email||currentAuthUser.is_anonymous)){hostDialog.close();await requirePermanentAccount('host');return;}
   if(!ownProfile){hostDialog.close();startHostProposal();return;}
-  if(!fd.getAll('days').length){toast('Indique au moins un jour de disponibilité.');return;}
+  const oneTime=fd.get('occurrence')==='once',days=oneTime?[]:fd.getAll('days'),eventDate=oneTime?String(fd.get('event_date')||''):null;
+  if(!oneTime&&!days.length){toast('Indique au moins un jour de disponibilité.');return;}
+  if(oneTime&&(!eventDate||eventDate<localToday())){toast('Choisis une date à venir pour cet événement ponctuel.');$('#place-event-date').focus();return;}
   const item=selectedHostResult;
   if(!item || item.address!==address){toast('Choisis un lieu ou une adresse dans les suggestions pour placer le repère.');$('#place-address').focus();return;}
   if(!item){toast('Lieu introuvable. Ajoute un nom de rue, la ville et le code postal.');return;}
-  const place={name:String(fd.get('name')).trim()||item.name,address:item.address||address,lat:item.lat,lng:item.lng,department:item.department||String(fd.get('department')||''),capacity:Number(fd.get('capacity')),kind:String(fd.get('kind')),days:fd.getAll('days'),note:String(fd.get('note')).trim(),contact:String(fd.get('contact')).trim(),published:true,area:item.department==='75'?'center':''};
+  const place={name:String(fd.get('name')).trim()||item.name,address:item.address||address,lat:item.lat,lng:item.lng,department:item.department||String(fd.get('department')||''),capacity:Number(fd.get('capacity')),kind:String(fd.get('kind')),days,one_time:oneTime,event_date:eventDate,note:String(fd.get('note')).trim(),contact:String(fd.get('contact')).trim(),published:true,area:item.department==='75'?'center':''};
+  const editing=editingPlaceId?places.find(existing=>String(existing.id)===String(editingPlaceId)):null;
   try {
-    if(db){place.owner_id=await ensureAnonymousUser();const {data,error}=await db.from('places').insert(place).select('*').single();if(error)throw error;Object.assign(place,data);}
-    else place.id=`demo-place-${Date.now()}`;
-    places.unshift(place);buildMarkers();hostDialog.close();form.reset();selectedHostResult=null;map.flyTo([place.lat,place.lng],15);toast(db?'Lieu publié.':'Lieu ajouté en mode démo, non partagé.');
+    if(db){place.owner_id=await ensureAnonymousUser();let result;if(editing)result=await db.from('places').update(place).eq('id',editing.id).eq('owner_id',currentUserId).select('*').single();else result=await db.from('places').insert(place).select('*').single();if(result.error)throw result.error;Object.assign(place,result.data);}
+    else place.id=editing?.id||`demo-place-${Date.now()}`;
+    if(editing)places=places.map(existing=>String(existing.id)===String(place.id)?place:existing);else places.unshift(place);
+    editingPlaceId=null;buildMarkers();hostDialog.close();form.reset();selectedHostResult=null;syncOccurrenceFields();map.flyTo([place.lat,place.lng],15);toast(db?(editing?'Lieu mis à jour.':'Lieu publié.'):(editing?'Lieu modifié en mode démo.':'Lieu ajouté en mode démo, non partagé.'));
+    if(editing)showPlaceDetails(place);
   } catch(error){console.error(error);toast(db?'Publication refusée. Vérifie que la migration Supabase est appliquée.':'Impossible d’ajouter ce lieu.');}
 });
 

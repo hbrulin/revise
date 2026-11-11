@@ -20,9 +20,9 @@ Dans **Project Settings → API**, renseigne l’URL du projet et la clé publiq
 
 L’autocomplete des lieux publics utilise Photon, basé sur OpenStreetMap. L’instance publique est prévue pour un trafic raisonnable, sans garantie de disponibilité ; `photonBaseUrl` dans `config.js` permet de changer de fournisseur. La recherche d’adresse est envoyée après saisie à Photon. Ne mets pas d’information personnelle dans cette recherche.
 
-Pour publier un lieu, il faut choisir une suggestion dans l’autocomplete et renseigner au moins un jour disponible. Une présence ne peut être ajoutée qu’à une date dont le jour de la semaine figure dans les disponibilités du lieu ; une présence existante reste annulable.
+Pour publier un lieu ou un événement, il faut choisir une suggestion dans l’autocomplete. Un lieu récurrent demande au moins un jour disponible ; un événement ponctuel demande une date unique. Depuis le détail, la personne qui a ajouté une entrée peut la modifier ou la supprimer. Une présence ne peut être ajoutée qu’à une date disponible ; une présence existante reste annulable.
 
-Les filtres couvrent Paris intramuros (75), les sept départements autour (77, 78, 91, 92, 93, 94, 95), puis un département choisi. Les résultats de Photon permettent de renseigner le département à partir du code postal ou de la commune. La migration classe comme Paris les anciennes lignes dont l’adresse indique Paris ou un code postal parisien ; les autres restent visibles dans « Toute l’Île-de-France » jusqu’à ce que leur adresse soit mise à jour.
+Les filtres couvrent Paris intramuros (75), les sept départements autour (77, 78, 91, 92, 93, 94, 95), puis un département choisi. Ils permettent aussi de filtrer par jour de la semaine ou par date précise ; choisir l’un efface l’autre. Les résultats de Photon permettent de renseigner le département à partir du code postal ou de la commune. La migration classe comme Paris les anciennes lignes dont l’adresse indique Paris ou un code postal parisien ; les autres restent visibles dans « Toute l’Île-de-France » jusqu’à ce que leur adresse soit mise à jour.
 
 ## Publication GitHub Pages
 

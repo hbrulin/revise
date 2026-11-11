@@ -13,6 +13,8 @@ create table if not exists public.places (
   capacity integer not null check (capacity between 1 and 100),
   kind text not null default 'Autre',
   days text[] not null default '{}',
+  one_time boolean not null default false,
+  event_date date,
   note text not null default '' check (char_length(note) <= 260),
   area text not null default '',
   department text,
@@ -45,6 +47,13 @@ create table if not exists public.profiles (
 alter table public.places add column if not exists department text;
 alter table public.places add column if not exists contact text not null default '';
 alter table public.places add column if not exists owner_id uuid references auth.users(id) on delete set null;
+alter table public.places add column if not exists one_time boolean not null default false;
+alter table public.places add column if not exists event_date date;
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'places_one_time_requires_date' and conrelid = 'public.places'::regclass) then
+    alter table public.places add constraint places_one_time_requires_date check (not one_time or event_date is not null);
+  end if;
+end $$;
 alter table public.profiles add column if not exists age smallint;
 alter table public.profiles add column if not exists gender text not null default 'Non renseigné';
 alter table public.profiles add column if not exists department text;
