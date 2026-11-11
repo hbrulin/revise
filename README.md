@@ -12,6 +12,8 @@ Dans **SQL Editor**, exécute le contenu mis à jour de `schema.sql`. Il ajoute 
 
 Dans **Authentication → Providers**, active les connexions anonymes. L’application utilise cette session locale au navigateur pour associer « Ma fiche », ses modifications/suppressions et les présences. Si le stockage du navigateur est effacé, la session anonyme peut être perdue.
 
+Pour pouvoir retrouver ta fiche après la perte de cette session, ouvre « Ma fiche » pendant que tu es encore connecté·e et choisis **Protéger ma fiche avec mon e-mail**. Confirme le lien reçu : l’adresse sert à retrouver le même profil et n’est jamais publiée. Dans Supabase, active le fournisseur **Email** et **Authentication → Settings → Enable manual linking**. Dans **Authentication → URL Configuration**, définis l’URL du site sur `https://hbrulin.github.io/revise/` et ajoute cette adresse aux URL de redirection autorisées (ainsi que `http://localhost:8000/**` pour le développement local). Le bouton « Se connecter » envoie ensuite un lien magique sans créer de nouveau compte. Une session anonyme déjà expirée ne peut pas être récupérée si aucune adresse n’avait été liée auparavant ; les comptes anonymes ne sont pas récupérables après perte de leur session ([documentation Supabase](https://supabase.com/docs/guides/auth/auth-anonymous)).
+
 Dans **Project Settings → API**, renseigne l’URL du projet et la clé publique `anon`/`publishable` dans `config.js`. L’application accepte aussi l’identifiant seul du projet. Cette clé publique peut être dans le site ; n’utilise jamais `service_role`.
 
 ## Lieux, recherche et filtres

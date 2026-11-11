@@ -24,7 +24,7 @@ const demoProfiles = [
 let places = [...demoPlaces], profiles = [...demoProfiles], markers = new Map();
 let searchMarker = null, searchTimer = null, placeTimer = null, searchAbort = null, placeAbort = null;
 const photonCache = new Map();
-let selectedHostResult = null, currentUserId = null, ownProfile = null, editingProfileId = null, detailPlace = null, currentAttendances = [];
+let selectedHostResult = null, currentUserId = null, currentAuthUser = null, ownProfile = null, editingProfileId = null, detailPlace = null, currentAttendances = [];
 let demoAttendances = [];
 let pendingHostAfterProfile = false, pendingAttendanceAfterProfile = false;
 let cachedOwnProfileId = localStorage.getItem('revise-own-profile-id');
@@ -32,7 +32,7 @@ const map = L.map('map', {scrollWheelZoom:false}).setView([48.8525,2.354],13);
 const tiles = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19, attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'}).addTo(map);
 tiles.on('tileerror', () => { $('#map-warning').hidden = false; });
 const markerIcon = L.divIcon({className:'place-marker-wrap',html:'<span class="place-marker">⌂</span>',iconSize:[42,42],iconAnchor:[21,40]});
-const hostDialog = $('#host-dialog'), profileDialog = $('#profile-dialog');
+const hostDialog = $('#host-dialog'), profileDialog = $('#profile-dialog'), authDialog = $('#auth-dialog');
 const defaultSubjects = ['Statistiques','Anglais','Méthodologie'];
 function hasRecoverableProfileId() { return Boolean(cachedOwnProfileId&&!/^(?:demo-|local-)/.test(cachedOwnProfileId)); }
 
@@ -60,7 +60,11 @@ function featureDepartment(properties = {}, fallback = '') {
 function placeDepartment(place) {
   const explicit = String(place.department || '');
   if (departmentNames[explicit]) return explicit;
-  return featureDepartment({}, place.address || '');
+  const fromText=featureDepartment({department:explicit},place.address||'');
+  if(fromText)return fromText;
+  const lat=Number(place.lat),lng=Number(place.lng);
+  if(Number.isFinite(lat)&&Number.isFinite(lng)&&lat>=48.815&&lat<=48.902&&lng>=2.224&&lng<=2.469)return '75';
+  return '';
 }
 function photonAddress(properties = {}) {
   const street = [properties.housenumber,properties.street].filter(Boolean).join(' ');
@@ -108,11 +112,13 @@ function syncOwnProfile() {
   $('#open-own-profile').hidden = false;
   $('#open-own-profile').textContent = 'Ma fiche';
   $('#open-profile-top').textContent = ownProfile ? 'Modifier ma fiche' : hasRecoverableProfileId() ? 'Retrouver ma fiche ↗' : 'Créer mon profil ↗';
+  $('#open-login').hidden = !db || Boolean(currentAuthUser);
 }
 async function loadShared() {
   if (!db) { document.body.classList.add('demo-mode'); syncOwnProfile(); buildMarkers(); return; }
   try {
     const {data:{session}} = await db.auth.getSession();
+    currentAuthUser=session?.user||null;
     currentUserId = session?.user?.id || null;
     const placesResult = await db.from('places').select('*').eq('published',true).order('created_at',{ascending:false});
     if (placesResult.error) throw placesResult.error;
@@ -134,15 +140,18 @@ async function loadShared() {
 async function ensureAnonymousUser() {
   if (!db) return null;
   const {data:{session}} = await db.auth.getSession();
-  if (session?.user) { currentUserId = session.user.id; return currentUserId; }
+  if (session?.user) { currentAuthUser=session.user;currentUserId = session.user.id;syncOwnProfile();return currentUserId; }
   const {data,error} = await db.auth.signInAnonymously();
   if (error) throw error;
-  currentUserId = data.user.id; return currentUserId;
+  currentAuthUser=data.user;currentUserId = data.user.id;syncOwnProfile();return currentUserId;
 }
 async function refreshOwnProfile() {
   if(!db){syncOwnProfile();return ownProfile;}
   try {
-    const owner=await ensureAnonymousUser();
+    const {data:{session}}=await db.auth.getSession();
+    if(!session?.user){currentAuthUser=null;currentUserId=null;ownProfile=null;syncOwnProfile();return null;}
+    currentAuthUser=session.user;currentUserId=session.user.id;
+    const owner=currentUserId;
     let {data,error}=await db.from('profiles').select('*').eq('owner_id',owner).limit(1).maybeSingle();
     if(error)throw error;
     if(!data&&hasRecoverableProfileId()){const result=await db.from('profiles').select('*').eq('id',cachedOwnProfileId).eq('owner_id',owner).maybeSingle();if(result.error)throw result.error;data=result.data;}
@@ -151,9 +160,10 @@ async function refreshOwnProfile() {
   } catch(error){console.error(error);toast('Je n’arrive pas à charger ta fiche. Vérifie la connexion et la migration Supabase.');return undefined;}
 }
 function showProfileRecoveryMessage() {
-  toast('Une fiche existe déjà, mais sa session anonyme n’est pas reconnue. Ne la recrée pas : réutilise la session du navigateur qui l’a créée. Si ses données ont été effacées, cette session ne peut pas être récupérée automatiquement.');
+  openAuthDialog('login');
 }
 async function openMyProfile() {
+  if(db&&!currentAuthUser&&hasRecoverableProfileId()){openAuthDialog('login');return;}
   const profile=ownProfile||await refreshOwnProfile();
   if(profile){showProfileDetails(profile);return;}
   if(profile===undefined)return;
@@ -161,6 +171,7 @@ async function openMyProfile() {
   toast('Aucune fiche n’est rattachée à la session active. Pour en créer une, utilise « Créer mon profil ».');
 }
 async function openProfileEditor() {
+  if(db&&!currentAuthUser&&hasRecoverableProfileId()){openAuthDialog('login');return;}
   const profile=ownProfile||await refreshOwnProfile();
   if(profile){fillProfileForm(profile);openDialog(profileDialog);return;}
   if(profile===undefined)return;
@@ -176,12 +187,13 @@ function renderAutocomplete(container,features,onChoose) {
   container.hidden = false;
   container.querySelectorAll('[data-result-index]').forEach(button => button.addEventListener('click',() => onChoose(features[Number(button.dataset.resultIndex)])));
 }
-async function photonSearch(query,signal) {
-  const cacheKey=normalizedText(query);
+async function photonSearch(query,signal,publicPlacesOnly=false) {
+  const cacheKey=`${publicPlacesOnly?'places:':'search:'}${normalizedText(query)}`;
   const cached=photonCache.get(cacheKey);
   if(cached && cached.expires>Date.now())return cached.features;
   const url = new URL(photonUrl);
-  url.searchParams.set('q',query); url.searchParams.set('limit','6'); url.searchParams.set('lang','fr');
+  url.searchParams.set('q',query); url.searchParams.set('limit',publicPlacesOnly?'8':'6'); url.searchParams.set('lang','fr');
+  if(publicPlacesOnly)url.searchParams.set('osm_tag','amenity');
   url.searchParams.set('lat',String(map.getCenter().lat)); url.searchParams.set('lon',String(map.getCenter().lng));
   const response = await fetch(url,{signal,headers:{'Accept':'application/json'}});
   if (!response.ok) throw new Error(`Photon ${response.status}`);
@@ -200,7 +212,7 @@ function attachAutocomplete(input,container,onChoose,kind) {
     const timer = setTimeout(async () => {
       const controller = new AbortController();
       if (kind === 'main') searchAbort = controller; else placeAbort = controller;
-      try { renderAutocomplete(container,await photonSearch(query,controller.signal),onChoose); }
+      try { renderAutocomplete(container,await photonSearch(query,controller.signal,kind==='place'),onChoose); }
       catch (error) { if (error.name !== 'AbortError') { container.innerHTML = '<div class="autocomplete-empty">Recherche temporairement indisponible</div>'; container.hidden = false; } }
     },450);
     if (kind === 'main') searchTimer = timer; else placeTimer = timer;
@@ -216,7 +228,7 @@ async function proposePublicPlace(feature) {
   $('#place-suggestions').hidden = true;
   const profile=ownProfile||await refreshOwnProfile();
   if(profile===undefined)return;
-  if(!profile){if(hasRecoverableProfileId()){showProfileRecoveryMessage();return;}pendingHostAfterProfile=true;toast('Crée ta fiche avant de proposer un lieu.');fillProfileForm(null);openDialog(profileDialog);return;}
+  if(!profile){if(hasRecoverableProfileId()){showProfileRecoveryMessage();return;}pendingHostAfterProfile=true;toast('Aucune fiche trouvée : crée ta fiche pour proposer un lieu.');fillProfileForm(null);openDialog(profileDialog);return;}
   pendingHostAfterProfile=false;openDialog(hostDialog);
 }
 function showPublicResult(feature) {
@@ -249,8 +261,9 @@ function setupSearch() {
 function showPlaceDetails(place) {
   if (!place) return;
   detailPlace=place;
+  const placeContact=String(place.contact||'').trim();
   const detail=$('#place-detail-content');
-  detail.innerHTML=`<div class="eyebrow">${escapeHtml(place.kind || 'LIEU DE RÉVISION')}</div><h2>${escapeHtml(place.name)}</h2><p class="detail-address">${escapeHtml(place.address)}</p><div class="detail-facts"><span>👥 ${Number(place.capacity)} places</span><span>📅 ${escapeHtml(daysText(place.days))}</span>${placeDepartment(place)?`<span>📍 ${escapeHtml(placeDepartment(place))} · ${escapeHtml(departmentNames[placeDepartment(place)])}</span>`:''}</div><div id="place-owner" class="place-owner"></div><p class="detail-note">${escapeHtml(place.note || 'Pas de précision renseignée.')}</p>${place.contact?`<button class="button button-outline detail-contact" type="button" data-copy="${escapeHtml(place.contact)}">Contacter le lieu · ${escapeHtml(place.contact)}</button>`:'<p class="field-help">Le lieu n’a pas renseigné de contact public.</p>'}<hr><h3>Signaler ta présence</h3><label class="date-label">Choisir une date<input id="attendance-date" type="date" min="${new Date().toISOString().slice(0,10)}" value="${new Date(Date.now()+86400000).toISOString().slice(0,10)}"></label><div id="attendance-summary" class="attendance-summary"></div><button id="attendance-action" class="button button-coral modal-submit" type="button">Je serai présent·e ce jour-là</button><p class="privacy-note">Les présences à cette date et les fiches des inscrit·es sont visibles aux personnes qui consultent ce lieu.</p>`;
+  detail.innerHTML=`<div class="eyebrow">${escapeHtml(place.kind || 'LIEU DE RÉVISION')}</div><h2>${escapeHtml(place.name)}</h2><p class="detail-address">${escapeHtml(place.address)}</p><div class="detail-facts"><span>👥 ${Number(place.capacity)} places</span><span>📅 ${escapeHtml(daysText(place.days))}</span>${placeDepartment(place)?`<span>📍 ${escapeHtml(placeDepartment(place))} · ${escapeHtml(departmentNames[placeDepartment(place)])}</span>`:''}</div><div id="place-owner" class="place-owner"></div><p class="detail-note">${escapeHtml(place.note || 'Pas de précision renseignée.')}</p>${placeContact?`<button class="button button-outline detail-contact" type="button" data-copy="${escapeHtml(placeContact)}">Contacter le lieu · ${escapeHtml(placeContact)}</button>`:'<p class="field-help">Aucun contact n’a été renseigné pour ce lieu.</p>'}<hr><h3>Signaler ta présence</h3><label class="date-label">Choisir une date<input id="attendance-date" type="date" min="${new Date().toISOString().slice(0,10)}" value="${new Date(Date.now()+86400000).toISOString().slice(0,10)}"></label><div id="attendance-summary" class="attendance-summary"></div><button id="attendance-action" class="button button-coral modal-submit" type="button">Je serai présent·e ce jour-là</button><p class="privacy-note">Les présences à cette date et les fiches des inscrit·es sont visibles aux personnes qui consultent ce lieu.</p>`;
   detail.querySelector('[data-copy]')?.addEventListener('click',event=>copyContact(event.currentTarget.dataset.copy));
   detail.querySelector('#attendance-date').addEventListener('change',renderAttendance);
   detail.querySelector('#attendance-action').addEventListener('click',toggleAttendance);
@@ -302,6 +315,7 @@ function placeAvailableOn(date,place) {
   return place.days.includes(days[dayIndex]);
 }
 async function toggleAttendance() {
+  if(db&&!currentAuthUser&&hasRecoverableProfileId()){openAuthDialog('login');return;}
   if (!ownProfile) {
     const profile=await refreshOwnProfile();
     if(profile===undefined)return;
@@ -327,10 +341,14 @@ function showProfileDetails(profile) {
   if (!profile) return;
   const isOwn=Boolean(ownProfile && String(profile.id)===String(ownProfile.id));
   const subjects=Object.entries(profile.subjects||{}).map(([name,level])=>`<span>${escapeHtml(name)} · ${Number(level)}/5</span>`).join('');
-  $('#profile-detail-content').innerHTML=`<div class="eyebrow">${isOwn?'MA FICHE':'FICHE ÉTUDIANT·E'}</div><h2>${escapeHtml(profile.nickname)}</h2><p class="detail-address">${Number(profile.age)||'Âge non renseigné'}${Number(profile.age)?' ans':''} · ${escapeHtml(profile.gender||'Non renseigné')} · ${escapeHtml(profile.study||'Formation non renseignée')}</p><div class="detail-facts"><span>📍 ${escapeHtml(profile.area||'Zone non renseignée')}</span><span>${escapeHtml(profile.department||'Département non renseigné')} · ${escapeHtml(departmentNames[profile.department]||'')}</span><span>📅 ${escapeHtml(daysText(profile.days))}</span></div><h3>Matières</h3><div class="detail-subjects">${subjects||'<span>Aucune matière renseignée</span>'}</div>${(profile.groups||[]).length?`<div class="profile-tags">${profile.groups.map(g=>`<i>${escapeHtml(groupLabel(g))}</i>`).join('')}</div>`:''}${profile.needs?`<p class="detail-note">${escapeHtml(profile.needs)}</p>`:''}${profile.contact?`<button class="button button-outline detail-contact" type="button" data-copy="${escapeHtml(profile.contact)}">Copier le contact · ${escapeHtml(profile.contact)}</button>`:''}${isOwn?'<div class="detail-actions"><button class="button button-outline" id="edit-own-profile">Modifier ma fiche</button><button class="text-button danger-text" id="delete-own-profile">Supprimer ma fiche</button></div>':''}`;
+  const contact=String(profile.contact||'').trim();
+  const accountRecovery=isOwn&&currentAuthUser?.is_anonymous?'<button class="button button-outline account-recovery" type="button" id="link-profile-email">Protéger ma fiche avec mon e-mail</button><p class="field-help">L’e-mail sert uniquement à retrouver cette fiche après une expiration de session.</p>':'';
+  const emailStatus=isOwn&&currentAuthUser?.email?`<p class="field-help">Fiche rattachée à ${escapeHtml(currentAuthUser.email)}.</p>`:'';
+  $('#profile-detail-content').innerHTML=`<div class="eyebrow">${isOwn?'MA FICHE':'FICHE ÉTUDIANT·E'}</div><h2>${escapeHtml(profile.nickname)}</h2><p class="detail-address">${Number(profile.age)||'Âge non renseigné'}${Number(profile.age)?' ans':''} · ${escapeHtml(profile.gender||'Non renseigné')} · ${escapeHtml(profile.study||'Formation non renseignée')}</p><div class="detail-facts"><span>📍 ${escapeHtml(profile.area||'Zone non renseignée')}</span><span>${escapeHtml(profile.department||'Département non renseigné')} · ${escapeHtml(departmentNames[profile.department]||'')}</span><span>📅 ${escapeHtml(daysText(profile.days))}</span></div><h3>Matières</h3><div class="detail-subjects">${subjects||'<span>Aucune matière renseignée</span>'}</div>${(profile.groups||[]).length?`<div class="profile-tags">${profile.groups.map(g=>`<i>${escapeHtml(groupLabel(g))}</i>`).join('')}</div>`:''}${profile.needs?`<p class="detail-note">${escapeHtml(profile.needs)}</p>`:''}${contact?`<button class="button button-outline detail-contact" type="button" data-copy="${escapeHtml(contact)}">Copier le contact · ${escapeHtml(contact)}</button>`:'<p class="field-help">Aucun contact renseigné sur cette fiche.</p>'}${accountRecovery}${emailStatus}${isOwn?'<div class="detail-actions"><button class="button button-outline" id="edit-own-profile">Modifier ma fiche</button><button class="text-button danger-text" id="delete-own-profile">Supprimer ma fiche</button></div>':''}`;
   $('#profile-detail-content').querySelector('[data-copy]')?.addEventListener('click',event=>copyContact(event.currentTarget.dataset.copy));
   $('#edit-own-profile')?.addEventListener('click',()=>{ $('#profile-detail-dialog').close(); fillProfileForm(ownProfile); openDialog(profileDialog); });
   $('#delete-own-profile')?.addEventListener('click',deleteOwnProfile);
+  $('#link-profile-email')?.addEventListener('click',()=>{ $('#profile-detail-dialog').close();openAuthDialog('link'); });
   openDialog($('#profile-detail-dialog'));
 }
 function fillProfileForm(profile) {
@@ -351,10 +369,21 @@ function addSubjectField(name='',level=3) {
   row.innerHTML=`<input class="subject-name" maxlength="50" aria-label="Nom de la matière" value="${escapeHtml(name)}" placeholder="Matière"><div class="level-picker" role="group" aria-label="Niveau de maîtrise">${[1,2,3,4,5].map(n=>`<label title="${n}/5"><input type="radio" name="${radioName}" value="${n}" ${n===level?'checked':''}><span>${n}</span></label>`).join('')}</div><button type="button" class="remove-subject" aria-label="Retirer cette matière">×</button>`;
   row.querySelector('.remove-subject').addEventListener('click',()=>row.remove());$('#subject-fields').append(row);
 }
-async function copyContact(contact) { try { await navigator.clipboard.writeText(contact); toast('Contact copié.'); } catch { toast(`Contact : ${contact}`); } }
+async function copyContact(contact) { const value=String(contact||'').trim();if(!value){toast('Aucun contact n’a été renseigné.');return;}try { await navigator.clipboard.writeText(value); toast('Contact copié.'); } catch { toast(`Contact : ${value}`); } }
+
+function authRedirectUrl(){return new URL('./',window.location.href).href;}
+function openAuthDialog(flow='login') {
+  authDialog.dataset.flow=flow;
+  $('#auth-title').textContent=flow==='link'?'Protéger ma fiche':'Se connecter à ma fiche';
+  $('#auth-intro').textContent=flow==='link'?'On t’enverra un lien de vérification pour rattacher cet e-mail à ta fiche. Tu pourras ensuite retrouver la même fiche après expiration de session.':'Saisis l’e-mail associé à ta fiche. Un lien de connexion t’y sera envoyé, sans créer de nouveau compte.';
+  $('#auth-submit').textContent=flow==='link'?'Envoyer le lien de vérification':'Envoyer le lien de connexion';
+  $('#auth-email').value=flow==='link'?(currentAuthUser?.email||''):'';
+  openDialog(authDialog);
+}
 
 function wireDialogs() {
   ['#open-host-intro','#open-host-map','#open-host-panel'].forEach(selector=>$(selector).addEventListener('click',startHostProposal));
+  $('#open-login').addEventListener('click',()=>openAuthDialog('login'));
   $('#open-profile-top').addEventListener('click',openProfileEditor);
   $('#open-profile-main').addEventListener('click',openProfileEditor);
   $('#open-own-profile').addEventListener('click',openMyProfile);
@@ -367,6 +396,7 @@ function wireDialogs() {
 }
 async function startHostProposal() {
   selectedHostResult=null;$('#host-form').reset();
+  if(db&&!currentAuthUser&&hasRecoverableProfileId()){openAuthDialog('login');return;}
   const profile=ownProfile||await refreshOwnProfile();
   if(profile===undefined)return;
   if(!profile){if(hasRecoverableProfileId()){showProfileRecoveryMessage();return;}pendingHostAfterProfile=true;toast('Crée ta fiche une seule fois avant de proposer un lieu.');fillProfileForm(null);openDialog(profileDialog);return;}
@@ -402,6 +432,25 @@ $('#profile-form').addEventListener('submit',async event=>{
     showProfileDetails(ownProfile);
   } catch(error){console.error(error);toast(db?'Impossible d’enregistrer ta fiche. Active la connexion anonyme et exécute la migration Supabase.':'Impossible d’enregistrer la fiche.');}
 });
+$('#auth-form').addEventListener('submit',async event=>{
+  event.preventDefault();
+  if(!db){toast('La connexion partagée n’est pas configurée.');return;}
+  const email=String(new FormData(event.currentTarget).get('email')||'').trim();
+  if(!email)return;
+  try {
+    if(authDialog.dataset.flow==='link'){
+      const {data:{session}}=await db.auth.getSession();
+      if(!session?.user){toast('Ta session a expiré. Connecte-toi avec le lien reçu par e-mail.');return;}
+      const {error}=await db.auth.updateUser({email},{emailRedirectTo:authRedirectUrl()});
+      if(error)throw error;
+      authDialog.close();toast(`Lien de vérification envoyé à ${email}.`);
+    } else {
+      const {error}=await db.auth.signInWithOtp({email,options:{shouldCreateUser:false,emailRedirectTo:authRedirectUrl()}});
+      if(error)throw error;
+      authDialog.close();toast(`Si une fiche est associée à cet e-mail, un lien de connexion a été envoyé à ${email}.`);
+    }
+  } catch(error){console.error(error);toast(error.message||'Impossible d’envoyer le lien. Vérifie le fournisseur e-mail dans Supabase.');}
+});
 $('#custom-subject').addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();const value=event.target.value.trim();if(value){addSubjectField(value);event.target.value='';}}});
 
 async function deleteOwnProfile() {
@@ -416,4 +465,9 @@ async function deleteOwnProfile() {
 
 wireDialogs();setupSearch();defaultSubjects.forEach(subject=>addSubjectField(subject,3));
 $('#area-select').addEventListener('change',()=>{$('#department-filter').hidden=$('#area-select').value!=='around';renderPlaces();});
+if(db)db.auth.onAuthStateChange((event,session)=>{
+  currentAuthUser=session?.user||null;currentUserId=session?.user?.id||null;
+  if(['SIGNED_IN','SIGNED_OUT','USER_UPDATED'].includes(event))setTimeout(()=>loadShared(),0);
+  syncOwnProfile();
+});
 loadShared();
