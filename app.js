@@ -26,6 +26,7 @@ let searchMarker = null, searchTimer = null, placeTimer = null, searchAbort = nu
 const photonCache = new Map();
 let selectedHostResult = null, currentUserId = null, ownProfile = null, editingProfileId = null, detailPlace = null, currentAttendances = [];
 let demoAttendances = [];
+let pendingHostAfterProfile = false, pendingAttendanceAfterProfile = false;
 let cachedOwnProfileId = localStorage.getItem('revise-own-profile-id');
 const map = L.map('map', {scrollWheelZoom:false}).setView([48.8525,2.354],13);
 const tiles = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19, attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'}).addTo(map);
@@ -68,7 +69,6 @@ function featureData(feature) {
   const props = feature.properties || {};
   return {name:props.name || props.street || 'Lieu public',address:photonAddress(props),lat:Number(feature.geometry.coordinates[1]),lng:Number(feature.geometry.coordinates[0]),department:featureDepartment(props),osmId:props.osm_id,osmType:props.osm_type};
 }
-function allPlacesInView() { return $('#type-select').value === 'people'; }
 function visiblePlaces() {
   const q = normalizedText($('#search-input').value.trim()), scope = $('#area-select').value, department = $('#department-select').value;
   return places.filter(place => {
@@ -76,36 +76,21 @@ function visiblePlaces() {
     const scopeOk = scope === 'all' || (scope === '75' && dept === '75') || (scope === 'around' && nearParis.has(dept));
     const deptOk = scope !== 'around' || department === 'all' || dept === department;
     const textOk = !q || normalizedText(`${place.name} ${place.address} ${place.kind} ${place.note || ''}`).includes(q);
-    return scopeOk && deptOk && textOk && $('#type-select').value !== 'people';
-  });
-}
-function visibleProfiles() {
-  const q = normalizedText($('#search-input').value.trim()), scope = $('#area-select').value, department = $('#department-select').value;
-  return profiles.filter(profile => {
-    const dept = String(profile.department || featureDepartment({}, profile.area || ''));
-    const scopeOk = scope === 'all' || (scope === '75' && dept === '75') || (scope === 'around' && nearParis.has(dept));
-    const deptOk = scope !== 'around' || department === 'all' || dept === department;
-    const searchable = `${profile.nickname} ${profile.study || ''} ${profile.area || ''} ${Object.keys(profile.subjects || {}).join(' ')} ${(profile.groups || []).join(' ')} ${profile.needs || ''}`;
-    return scopeOk && deptOk && (!q || normalizedText(searchable).includes(q));
+    return scopeOk && deptOk && textOk;
   });
 }
 function groupLabel(group) {
   return ({'chosen-non-mixity':'Non-mixité choisie','under-25':'Moins de 25 ans','international':'Étudiant·es internationaux·ales'}[group] || group);
 }
 function renderPlaces() {
-  const list = $('#place-list'), peopleMode = $('#type-select').value === 'people', shown = peopleMode ? visibleProfiles() : visiblePlaces();
-  $('#map-count').textContent = peopleMode ? `${shown.length} fiche${shown.length > 1 ? 's' : ''}` : `${shown.length} lieu${shown.length > 1 ? 'x' : ''}`;
-  list.innerHTML = shown.length ? (peopleMode ? shown.map(profile => {
-    const subjects = Object.entries(profile.subjects || {}).map(([name,level]) => `${escapeHtml(name)} ${'★'.repeat(Number(level))}${'☆'.repeat(Math.max(0,5-Number(level)))}`).join(' · ');
-    const gender = profile.gender || 'Non renseigné';
-    return `<button class="profile-result ${ownProfile?.id === profile.id ? 'is-own-profile' : ''}" data-profile="${escapeHtml(profile.id)}"><span class="place-type-icon profile-icon">${escapeHtml((profile.nickname || '?').slice(0,1).toUpperCase())}</span><span class="profile-result-copy"><b>${escapeHtml(profile.nickname)}${ownProfile?.id === profile.id ? ' · Ma fiche' : ''}</b><small>${Number(profile.age) ? `${Number(profile.age)} ans` : 'Âge non renseigné'} · ${escapeHtml(gender)} · ${escapeHtml(profile.area || 'Zone non précisée')} · ${escapeHtml(profile.department || '')}</small><span class="profile-subjects">${subjects || 'Matières à préciser'}</span><span class="place-meta">📅 ${escapeHtml(daysText(profile.days))}</span>${(profile.groups || []).length ? `<span class="profile-tags">${profile.groups.map(g => `<i>${escapeHtml(groupLabel(g))}</i>`).join('')}</span>` : ''}</span><span class="card-arrow">↗</span></button>`;
-  }).join('') : shown.map(place => `<button class="place-card" data-place="${escapeHtml(place.id)}"><span class="place-type-icon">${place.kind === 'Bibliothèque' ? '▤' : place.kind === 'Café' ? '☕' : '⌂'}</span><span class="place-card-copy"><b>${escapeHtml(place.name)}</b><small>${escapeHtml(place.address)}</small><span class="place-meta">👥 ${place.capacity} places <i>·</i> 📅 ${escapeHtml(daysText(place.days))}</span></span><span class="card-arrow">↗</span></button>`).join('')) : `<div class="empty-state">${peopleMode ? 'Aucune fiche pour cette recherche. Crée la tienne pour trouver ton groupe ✨' : 'Aucun lieu avec ces filtres. Essaie une autre zone ou propose le tien ✨'}</div>`;
+  const list = $('#place-list'), shown = visiblePlaces();
+  $('#map-count').textContent = `${shown.length} lieu${shown.length > 1 ? 'x' : ''}`;
+  list.innerHTML = shown.length ? shown.map(place => `<button class="place-card" data-place="${escapeHtml(place.id)}"><span class="place-type-icon">${place.kind === 'Bibliothèque' ? '▤' : place.kind === 'Café' ? '☕' : '⌂'}</span><span class="place-card-copy"><b>${escapeHtml(place.name)}</b><small>${escapeHtml(place.address)}</small><span class="place-meta">👥 ${place.capacity} places <i>·</i> 📅 ${escapeHtml(daysText(place.days))}</span></span><span class="card-arrow">↗</span></button>`).join('') : '<div class="empty-state">Aucun lieu avec ces filtres. Essaie une autre zone ou propose le tien ✨</div>';
   for (const [id,marker] of markers) {
-    if (allPlacesInView() || shown.some(item => String(item.id) === id)) marker.addTo(map);
+    if (shown.some(item => String(item.id) === id)) marker.addTo(map);
     else marker.remove();
   }
   list.querySelectorAll('[data-place]').forEach(button => button.addEventListener('click', () => showPlaceDetails(places.find(p => String(p.id) === button.dataset.place))));
-  list.querySelectorAll('[data-profile]').forEach(button => button.addEventListener('click', () => showProfileDetails(profiles.find(p => String(p.id) === button.dataset.profile))));
 }
 function buildMarkers() {
   for (const marker of markers.values()) marker.remove(); markers.clear();
@@ -127,14 +112,16 @@ async function loadShared() {
   try {
     const {data:{session}} = await db.auth.getSession();
     currentUserId = session?.user?.id || null;
-    const [placesResult,profilesResult] = await Promise.all([
-      db.from('places').select('*').eq('published',true).order('created_at',{ascending:false}),
-      db.from('profiles').select('*').eq('published',true).order('created_at',{ascending:false})
-    ]);
+    const placesResult = await db.from('places').select('*').eq('published',true).order('created_at',{ascending:false});
     if (placesResult.error) throw placesResult.error;
-    if (profilesResult.error) throw profilesResult.error;
     places = placesResult.data.map(p => ({...p,days:p.days || [],department:placeDepartment(p)}));
-    profiles = profilesResult.data || [];
+    profiles = [];
+    ownProfile = null;
+    if (currentUserId) {
+      const {data,error}=await db.from('profiles').select('*').eq('owner_id',currentUserId).maybeSingle();
+      if(error)throw error;
+      if(data){profiles.push(data);ownProfile=data;localStorage.setItem('revise-own-profile-id',String(data.id));cachedOwnProfileId=String(data.id);}
+    }
     syncOwnProfile(); buildMarkers(); document.body.classList.remove('demo-mode');
   } catch (error) {
     console.error(error); document.body.classList.add('demo-mode');
@@ -173,6 +160,7 @@ async function photonSearch(query,signal) {
 }
 function attachAutocomplete(input,container,onChoose,kind) {
   input.addEventListener('input',() => {
+    if (kind === 'place') selectedHostResult = null;
     clearTimeout(kind === 'main' ? searchTimer : placeTimer);
     if (kind === 'main') { renderPlaces(); if (searchAbort) searchAbort.abort(); }
     else if (placeAbort) placeAbort.abort();
@@ -195,7 +183,8 @@ function proposePublicPlace(feature) {
   $('#place-address').value = item.address;
   form.elements.lat.value = item.lat; form.elements.lng.value = item.lng; form.elements.department.value = item.department;
   $('#place-suggestions').hidden = true;
-  openDialog(hostDialog);
+  if(!ownProfile){pendingHostAfterProfile=true;toast('Crée ta fiche avant de proposer un lieu.');fillProfileForm(null);openDialog(profileDialog);return;}
+  pendingHostAfterProfile=false;openDialog(hostDialog);
 }
 function showPublicResult(feature) {
   const item = featureData(feature);
@@ -222,18 +211,35 @@ function setupSearch() {
   $('#search-input').addEventListener('keydown',event => { if (event.key==='Enter') { event.preventDefault(); $('#search-suggestions').hidden=true; renderPlaces(); } });
   $('#area-select').addEventListener('change',() => { $('#department-filter').hidden=$('#area-select').value!=='around'; renderPlaces(); });
   $('#department-select').addEventListener('change',renderPlaces);
-  $('#type-select').addEventListener('change',renderPlaces);
 }
 
 function showPlaceDetails(place) {
   if (!place) return;
   detailPlace=place;
   const detail=$('#place-detail-content');
-  detail.innerHTML=`<div class="eyebrow">${escapeHtml(place.kind || 'LIEU DE RÉVISION')}</div><h2>${escapeHtml(place.name)}</h2><p class="detail-address">${escapeHtml(place.address)}</p><div class="detail-facts"><span>👥 ${Number(place.capacity)} places</span><span>📅 ${escapeHtml(daysText(place.days))}</span>${placeDepartment(place)?`<span>📍 ${escapeHtml(placeDepartment(place))} · ${escapeHtml(departmentNames[placeDepartment(place)])}</span>`:''}</div><p class="detail-note">${escapeHtml(place.note || 'Pas de précision renseignée.')}</p>${place.contact?`<button class="button button-outline detail-contact" type="button" data-copy="${escapeHtml(place.contact)}">Contacter le lieu · ${escapeHtml(place.contact)}</button>`:'<p class="field-help">Le lieu n’a pas renseigné de contact public.</p>'}<hr><h3>Signaler ta présence</h3><label class="date-label">Choisir une date<input id="attendance-date" type="date" min="${new Date().toISOString().slice(0,10)}" value="${new Date(Date.now()+86400000).toISOString().slice(0,10)}"></label><div id="attendance-summary" class="attendance-summary"></div><button id="attendance-action" class="button button-coral modal-submit" type="button">Je serai présent·e ce jour-là</button><p class="privacy-note">Les présences à cette date sont visibles par les personnes qui consultent le lieu.</p>`;
+  detail.innerHTML=`<div class="eyebrow">${escapeHtml(place.kind || 'LIEU DE RÉVISION')}</div><h2>${escapeHtml(place.name)}</h2><p class="detail-address">${escapeHtml(place.address)}</p><div class="detail-facts"><span>👥 ${Number(place.capacity)} places</span><span>📅 ${escapeHtml(daysText(place.days))}</span>${placeDepartment(place)?`<span>📍 ${escapeHtml(placeDepartment(place))} · ${escapeHtml(departmentNames[placeDepartment(place)])}</span>`:''}</div><div id="place-owner" class="place-owner"></div><p class="detail-note">${escapeHtml(place.note || 'Pas de précision renseignée.')}</p>${place.contact?`<button class="button button-outline detail-contact" type="button" data-copy="${escapeHtml(place.contact)}">Contacter le lieu · ${escapeHtml(place.contact)}</button>`:'<p class="field-help">Le lieu n’a pas renseigné de contact public.</p>'}<hr><h3>Signaler ta présence</h3><label class="date-label">Choisir une date<input id="attendance-date" type="date" min="${new Date().toISOString().slice(0,10)}" value="${new Date(Date.now()+86400000).toISOString().slice(0,10)}"></label><div id="attendance-summary" class="attendance-summary"></div><button id="attendance-action" class="button button-coral modal-submit" type="button">Je serai présent·e ce jour-là</button><p class="privacy-note">Les présences à cette date et les fiches des inscrit·es sont visibles aux personnes qui consultent ce lieu.</p>`;
   detail.querySelector('[data-copy]')?.addEventListener('click',event=>copyContact(event.currentTarget.dataset.copy));
   detail.querySelector('#attendance-date').addEventListener('change',renderAttendance);
   detail.querySelector('#attendance-action').addEventListener('click',toggleAttendance);
-  openDialog($('#place-detail-dialog')); renderAttendance();
+  openDialog($('#place-detail-dialog')); renderAttendance(); loadPlaceOwnerProfile(place);
+}
+function cacheProfile(profile) {
+  if(!profile)return;
+  const index=profiles.findIndex(item=>String(item.id)===String(profile.id));
+  if(index<0)profiles.push(profile);else profiles[index]=profile;
+}
+async function loadPlaceOwnerProfile(place) {
+  const slot=$('#place-owner');
+  if(!place?.owner_id){slot.innerHTML='';return;}
+  try {
+    let profile;
+    if(db){const {data,error}=await db.from('profiles').select('*').eq('owner_id',place.owner_id).maybeSingle();if(error)throw error;profile=data;}
+    else profile=profiles.find(item=>item.owner_id===place.owner_id);
+    if(!profile){slot.innerHTML='';return;}
+    cacheProfile(profile);
+    slot.innerHTML=`<button type="button" class="profile-context-link" data-owner-profile="${escapeHtml(profile.id)}"><span class="profile-context-avatar">${escapeHtml(profile.nickname.slice(0,1).toUpperCase())}</span><span><b>Voir la fiche de ${escapeHtml(profile.nickname)}</b><small>${Number(profile.age)||'Âge non renseigné'}${Number(profile.age)?' ans':''} · ${escapeHtml(profile.study||profile.area||'Étudiant·e')}</small></span><span>↗</span></button>`;
+    slot.querySelector('[data-owner-profile]').addEventListener('click',()=>showProfileDetails(profile));
+  } catch(error){console.error(error);slot.innerHTML='';}
 }
 async function renderAttendance() {
   if (!detailPlace) return;
@@ -244,19 +250,29 @@ async function renderAttendance() {
       const {data,error}=await db.from('place_attendance').select('id,profile_id,meeting_date,owner_id').eq('place_id',detailPlace.id).eq('meeting_date',date);
       if(error)throw error; currentAttendances=data||[];
     } else currentAttendances=demoAttendances.filter(row=>String(row.place_id)===String(detailPlace.id)&&row.meeting_date===date);
-    const names=currentAttendances.map(row=>profiles.find(profile=>String(profile.id)===String(row.profile_id))?.nickname).filter(Boolean);
+    if(db&&currentAttendances.length){
+      const ids=[...new Set(currentAttendances.map(row=>row.profile_id))];
+      const {data,error}=await db.from('profiles').select('*').in('id',ids);if(error)throw error;(data||[]).forEach(cacheProfile);
+    }
+    const attendees=currentAttendances.map(row=>({row,profile:profiles.find(profile=>String(profile.id)===String(row.profile_id))}));
     const attending=currentAttendances.some(row=>ownProfile&&String(row.profile_id)===String(ownProfile.id));
-    summary.innerHTML=`<b>${currentAttendances.length} / ${Number(detailPlace.capacity)} place${Number(detailPlace.capacity)>1?'s':''} réservée${Number(detailPlace.capacity)>1?'s':''}</b>${names.length?`<small>${names.map(escapeHtml).join(' · ')}</small>`:'<small>Pas encore de présence signalée.</small>'}`;
-    action.textContent=attending?'Annuler ma présence':'Je serai présent·e ce jour-là'; action.dataset.attending=String(attending);
-    action.disabled=!attending&&currentAttendances.length>=Number(detailPlace.capacity);
+    summary.innerHTML=`<b>${currentAttendances.length} / ${Number(detailPlace.capacity)} place${Number(detailPlace.capacity)>1?'s':''} réservée${Number(detailPlace.capacity)>1?'s':''}</b>${attendees.length?`<div class="attendee-links">${attendees.map(({row,profile})=>profile?`<button type="button" data-attendee-profile="${escapeHtml(profile.id)}">${escapeHtml(profile.nickname)}${Number(profile.age)?`, ${Number(profile.age)} ans`:''} ↗</button>`:'<span>Présence confirmée</span>').join('')}</div>`:'<small>Pas encore de présence signalée.</small>'}`;
+    summary.querySelectorAll('[data-attendee-profile]').forEach(button=>button.addEventListener('click',()=>showProfileDetails(profiles.find(profile=>String(profile.id)===button.dataset.attendeeProfile))));
+    const available=placeAvailableOn(date,detailPlace);
+    action.textContent=attending?'Annuler ma présence':available?'Je serai présent·e ce jour-là':'Lieu non disponible ce jour-là'; action.dataset.attending=String(attending);
+    action.disabled=!attending&&(!available||currentAttendances.length>=Number(detailPlace.capacity));
   } catch(error) { console.error(error); summary.textContent='Présences indisponibles : exécute la migration Supabase de schema.sql.'; action.disabled=true; }
 }
-async function toggleAttendance() {
-  if (!ownProfile) { toast('Crée d’abord ta fiche pour signaler ta présence.'); openDialog(profileDialog); return; }
-  const date=$('#attendance-date').value;
+function placeAvailableOn(date,place) {
+  if(!date||!place?.days?.length)return false;
   const dayIndex=new Date(`${date}T12:00:00`).getDay(),days=['Dim','Lun','Mar','Mer','Jeu','Ven','Sam'];
-  if (detailPlace.days?.length && !detailPlace.days.includes(days[dayIndex])) { toast(`Ce lieu indique plutôt : ${daysText(detailPlace.days)}.`); return; }
+  return place.days.includes(days[dayIndex]);
+}
+async function toggleAttendance() {
+  if (!ownProfile) { pendingAttendanceAfterProfile=true;toast('Crée d’abord ta fiche ; ta présence sera enregistrée ensuite.');fillProfileForm(null);openDialog(profileDialog);return; }
+  const date=$('#attendance-date').value;
   const existing=currentAttendances.find(row=>String(row.profile_id)===String(ownProfile.id));
+  if (!existing&&!placeAvailableOn(date,detailPlace)) { toast(detailPlace.days?.length?`Ce lieu indique plutôt : ${daysText(detailPlace.days)}.`:'Ce lieu n’a pas indiqué de jours disponibles.'); return; }
   try {
     if (db && !String(detailPlace.id).startsWith('demo-')) {
       const owner=await ensureAnonymousUser();
@@ -301,7 +317,7 @@ function addSubjectField(name='',level=3) {
 async function copyContact(contact) { try { await navigator.clipboard.writeText(contact); toast('Contact copié.'); } catch { toast(`Contact : ${contact}`); } }
 
 function wireDialogs() {
-  ['#open-host-intro','#open-host-map','#open-host-panel'].forEach(selector=>$(selector).addEventListener('click',()=>{selectedHostResult=null;$('#host-form').reset();openDialog(hostDialog);}));
+  ['#open-host-intro','#open-host-map','#open-host-panel'].forEach(selector=>$(selector).addEventListener('click',startHostProposal));
   ['#open-profile-top','#open-profile-main'].forEach(selector=>$(selector).addEventListener('click',()=>{fillProfileForm(ownProfile);openDialog(profileDialog);}));
   $('#open-own-profile').addEventListener('click',()=>showProfileDetails(ownProfile));
   document.querySelectorAll('[data-close]').forEach(button=>button.addEventListener('click',()=>button.closest('dialog').close()));
@@ -311,11 +327,18 @@ function wireDialogs() {
     navigator.geolocation.getCurrentPosition(position=>{map.flyTo([position.coords.latitude,position.coords.longitude],13);L.circleMarker([position.coords.latitude,position.coords.longitude],{radius:8,color:'#fff',weight:3,fillColor:'#76a88b',fillOpacity:1}).addTo(map).bindPopup('Ta position').openPopup();},()=>toast('Position non partagée. Tu peux explorer la carte manuellement.'),{timeout:8000});
   });
 }
+function startHostProposal() {
+  selectedHostResult=null;$('#host-form').reset();
+  if(!ownProfile){pendingHostAfterProfile=true;toast('Crée ta fiche avant de proposer un lieu.');fillProfileForm(null);openDialog(profileDialog);return;}
+  pendingHostAfterProfile=false;openDialog(hostDialog);
+}
 
 $('#host-form').addEventListener('submit',async event=>{
   event.preventDefault();const form=event.currentTarget,fd=new FormData(form),address=String(fd.get('address')).trim();
-  let item=selectedHostResult;
-  if(!item || item.address!==address){try{const results=await photonSearch(address,new AbortController().signal);item=results[0]?featureData(results[0]):null;}catch(error){console.error(error);toast('Recherche d’adresse indisponible. Réessaie dans un instant.');return;}}
+  if(!ownProfile){hostDialog.close();startHostProposal();return;}
+  if(!fd.getAll('days').length){toast('Indique au moins un jour de disponibilité.');return;}
+  const item=selectedHostResult;
+  if(!item || item.address!==address){toast('Choisis un lieu ou une adresse dans les suggestions pour placer le repère.');$('#place-address').focus();return;}
   if(!item){toast('Lieu introuvable. Ajoute un nom de rue, la ville et le code postal.');return;}
   const place={name:String(fd.get('name')).trim()||item.name,address:item.address||address,lat:item.lat,lng:item.lng,department:item.department||String(fd.get('department')||''),capacity:Number(fd.get('capacity')),kind:String(fd.get('kind')),days:fd.getAll('days'),note:String(fd.get('note')).trim(),contact:String(fd.get('contact')).trim(),published:true,area:item.department==='75'?'center':''};
   try {
@@ -333,7 +356,10 @@ $('#profile-form').addEventListener('submit',async event=>{
     if(db){profile.owner_id=await ensureAnonymousUser();let result;if(editingProfileId)result=await db.from('profiles').update(profile).eq('id',editingProfileId).select('*').single();else result=await db.from('profiles').insert(profile).select('*').single();if(result.error)throw result.error;Object.assign(profile,result.data);}
     else profile.id=editingProfileId||`demo-profile-${Date.now()}`;
     if(editingProfileId)profiles=profiles.map(item=>String(item.id)===String(profile.id)?profile:item);else profiles.unshift(profile);
-    localStorage.setItem('revise-own-profile-id',String(profile.id));cachedOwnProfileId=String(profile.id);ownProfile=profile;currentUserId=profile.owner_id||currentUserId;syncOwnProfile();renderPlaces();profileDialog.close();editingProfileId=null;toast(db?'Fiche enregistrée.':'Fiche ajoutée en mode démo, non partagée.');showProfileDetails(ownProfile);
+    localStorage.setItem('revise-own-profile-id',String(profile.id));cachedOwnProfileId=String(profile.id);ownProfile=profile;currentUserId=profile.owner_id||currentUserId;syncOwnProfile();renderPlaces();profileDialog.close();editingProfileId=null;toast(db?'Fiche enregistrée.':'Fiche ajoutée en mode démo, non partagée.');
+    if(pendingHostAfterProfile){pendingHostAfterProfile=false;openDialog(hostDialog);return;}
+    if(pendingAttendanceAfterProfile){pendingAttendanceAfterProfile=false;await toggleAttendance();return;}
+    showProfileDetails(ownProfile);
   } catch(error){console.error(error);toast(db?'Impossible d’enregistrer ta fiche. Active la connexion anonyme et exécute la migration Supabase.':'Impossible d’enregistrer la fiche.');}
 });
 $('#custom-subject').addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();const value=event.target.value.trim();if(value){addSubjectField(value);event.target.value='';}}});

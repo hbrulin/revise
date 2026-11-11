@@ -1,6 +1,6 @@
 -- Révise ensemble — setup et migration Supabase.
 -- Après exécution, active aussi Auth > Providers > Anonymous sign-ins.
--- Les champs de profil, genre, contact et disponibilités sont publics par choix explicite.
+-- Les fiches sont lisibles par leur propriétaire, les personnes qui consultent un lieu publié dont la fiche est l'hôte, et les personnes inscrites à un lieu publié.
 
 create extension if not exists pgcrypto;
 
@@ -37,7 +37,8 @@ create table if not exists public.profiles (
   contact text not null default '' check (char_length(contact) <= 100),
   owner_id uuid references auth.users(id) on delete cascade,
   published boolean not null default true,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  constraint profiles_id_owner_unique unique (id, owner_id)
 );
 
 -- Add columns for projects that were created with an earlier version of this app.
@@ -48,6 +49,13 @@ alter table public.profiles add column if not exists age smallint;
 alter table public.profiles add column if not exists gender text not null default 'Non renseigné';
 alter table public.profiles add column if not exists department text;
 alter table public.profiles add column if not exists owner_id uuid references auth.users(id) on delete cascade;
+
+-- Needed by the composite foreign key that ties a presence to its owner's profile.
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'profiles_id_owner_unique' and conrelid = 'public.profiles'::regclass) then
+    alter table public.profiles add constraint profiles_id_owner_unique unique (id, owner_id);
+  end if;
+end $$;
 
 do $$ begin
   if not exists (select 1 from pg_constraint where conname = 'profiles_age_range_check' and conrelid = 'public.profiles'::regclass) then
@@ -61,12 +69,29 @@ end $$;
 create table if not exists public.place_attendance (
   id uuid primary key default gen_random_uuid(),
   place_id uuid not null references public.places(id) on delete cascade,
-  profile_id uuid not null references public.profiles(id) on delete cascade,
+  profile_id uuid not null,
   owner_id uuid not null references auth.users(id) on delete cascade,
   meeting_date date not null,
   created_at timestamptz not null default now(),
-  unique(place_id, profile_id, meeting_date)
+  unique(place_id, profile_id, meeting_date),
+  constraint place_attendance_profile_owner_fk foreign key (profile_id,owner_id) references public.profiles(id,owner_id) on delete cascade
 );
+
+-- Migrate the earlier one-column profile foreign key, if this table already existed.
+alter table public.place_attendance drop constraint if exists place_attendance_profile_id_fkey;
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'place_attendance_profile_owner_fk' and conrelid = 'public.place_attendance'::regclass) then
+    alter table public.place_attendance add constraint place_attendance_profile_owner_fk
+      foreign key (profile_id, owner_id) references public.profiles(id, owner_id) on delete cascade;
+  end if;
+end $$;
+
+create or replace function public.has_owned_profile()
+returns boolean
+language sql stable security definer set search_path = ''
+as $$ select exists(select 1 from public.profiles p where p.owner_id = (select auth.uid())) $$;
+revoke all on function public.has_owned_profile() from public, anon;
+grant execute on function public.has_owned_profile() to authenticated;
 
 alter table public.places enable row level security;
 alter table public.profiles enable row level security;
@@ -77,13 +102,16 @@ drop policy if exists "Anyone can suggest a place" on public.places;
 drop policy if exists "Anyone can create a profile" on public.profiles;
 drop policy if exists "Anyone can read published places" on public.places;
 drop policy if exists "Anyone can read published profiles" on public.profiles;
+drop policy if exists "Public profiles are readable" on public.profiles;
+drop policy if exists "Profiles are public" on public.profiles;
+drop policy if exists "Users can read profiles" on public.profiles;
 
 drop policy if exists "Published places are public" on public.places;
 create policy "Published places are public" on public.places
   for select using (published = true);
 drop policy if exists "Owners can add places" on public.places;
 create policy "Owners can add places" on public.places
-  for insert to authenticated with check (auth.uid() = owner_id and published = true);
+  for insert to authenticated with check (auth.uid() = owner_id and published = true and public.has_owned_profile());
 drop policy if exists "Owners can edit places" on public.places;
 create policy "Owners can edit places" on public.places
   for update to authenticated using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
@@ -92,11 +120,20 @@ create policy "Owners can delete places" on public.places
   for delete to authenticated using (auth.uid() = owner_id);
 
 drop policy if exists "Published profiles are public" on public.profiles;
-create policy "Published profiles are public" on public.profiles
-  for select using (published = true);
+drop policy if exists "Profiles visible by context" on public.profiles;
+create policy "Profiles visible by context" on public.profiles
+  for select using (
+    (auth.uid() = owner_id)
+    or exists (select 1 from public.places venue where venue.owner_id = profiles.owner_id and venue.published = true)
+    or exists (
+      select 1 from public.place_attendance attendance
+      join public.places venue on venue.id = attendance.place_id
+      where attendance.profile_id = profiles.id and venue.published = true
+    )
+  );
 drop policy if exists "Owners can add profiles" on public.profiles;
 create policy "Owners can add profiles" on public.profiles
-  for insert to authenticated with check (auth.uid() = owner_id and published = true);
+  for insert to authenticated with check (auth.uid() = owner_id and published = true and not public.has_owned_profile());
 drop policy if exists "Owners can edit profiles" on public.profiles;
 create policy "Owners can edit profiles" on public.profiles
   for update to authenticated using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
@@ -109,11 +146,7 @@ create policy "Attendance is public" on public.place_attendance
   for select using (true);
 drop policy if exists "Members can mark their attendance" on public.place_attendance;
 create policy "Members can mark their attendance" on public.place_attendance
-  for insert to authenticated with check (
-    auth.uid() = owner_id and exists (
-      select 1 from public.profiles p where p.id = profile_id and p.owner_id = auth.uid()
-    )
-  );
+  for insert to authenticated with check (auth.uid() = owner_id);
 drop policy if exists "Members can cancel their attendance" on public.place_attendance;
 create policy "Members can cancel their attendance" on public.place_attendance
   for delete to authenticated using (auth.uid() = owner_id);
