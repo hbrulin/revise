@@ -34,6 +34,7 @@ tiles.on('tileerror', () => { $('#map-warning').hidden = false; });
 const markerIcon = L.divIcon({className:'place-marker-wrap',html:'<span class="place-marker">⌂</span>',iconSize:[42,42],iconAnchor:[21,40]});
 const hostDialog = $('#host-dialog'), profileDialog = $('#profile-dialog');
 const defaultSubjects = ['Statistiques','Anglais','Méthodologie'];
+function hasRecoverableProfileId() { return Boolean(cachedOwnProfileId&&!/^(?:demo-|local-)/.test(cachedOwnProfileId)); }
 
 function toast(message) {
   const node = $('#toast'); node.textContent = message; node.classList.add('show');
@@ -103,9 +104,10 @@ function buildMarkers() {
   renderPlaces();
 }
 function syncOwnProfile() {
-  ownProfile = profiles.find(profile => currentUserId && profile.owner_id === currentUserId) || (!db ? profiles.find(profile => String(profile.id) === cachedOwnProfileId) : null) || null;
-  $('#open-own-profile').hidden = !ownProfile;
-  $('#open-profile-top').textContent = ownProfile ? 'Modifier ma fiche' : 'Créer mon profil ↗';
+  ownProfile = profiles.find(profile => currentUserId && String(profile.owner_id) === String(currentUserId)) || (!db ? profiles.find(profile => String(profile.id) === cachedOwnProfileId) : null) || null;
+  $('#open-own-profile').hidden = false;
+  $('#open-own-profile').textContent = 'Ma fiche';
+  $('#open-profile-top').textContent = ownProfile ? 'Modifier ma fiche' : hasRecoverableProfileId() ? 'Retrouver ma fiche ↗' : 'Créer mon profil ↗';
 }
 async function loadShared() {
   if (!db) { document.body.classList.add('demo-mode'); syncOwnProfile(); buildMarkers(); return; }
@@ -118,13 +120,14 @@ async function loadShared() {
     profiles = [];
     ownProfile = null;
     if (currentUserId) {
-      const {data,error}=await db.from('profiles').select('*').eq('owner_id',currentUserId).maybeSingle();
+      const {data,error}=await db.from('profiles').select('*').eq('owner_id',currentUserId).limit(1).maybeSingle();
       if(error)throw error;
       if(data){profiles.push(data);ownProfile=data;localStorage.setItem('revise-own-profile-id',String(data.id));cachedOwnProfileId=String(data.id);}
     }
     syncOwnProfile(); buildMarkers(); document.body.classList.remove('demo-mode');
   } catch (error) {
     console.error(error); document.body.classList.add('demo-mode');
+    syncOwnProfile(); buildMarkers();
     toast('Base partagée à mettre à jour : exécute le nouveau schema.sql dans Supabase.');
   }
 }
@@ -135,6 +138,34 @@ async function ensureAnonymousUser() {
   const {data,error} = await db.auth.signInAnonymously();
   if (error) throw error;
   currentUserId = data.user.id; return currentUserId;
+}
+async function refreshOwnProfile() {
+  if(!db){syncOwnProfile();return ownProfile;}
+  try {
+    const owner=await ensureAnonymousUser();
+    let {data,error}=await db.from('profiles').select('*').eq('owner_id',owner).limit(1).maybeSingle();
+    if(error)throw error;
+    if(!data&&hasRecoverableProfileId()){const result=await db.from('profiles').select('*').eq('id',cachedOwnProfileId).eq('owner_id',owner).maybeSingle();if(result.error)throw result.error;data=result.data;}
+    if(data){ownProfile=data;cacheProfile(data);localStorage.setItem('revise-own-profile-id',String(data.id));cachedOwnProfileId=String(data.id);}
+    syncOwnProfile();return ownProfile;
+  } catch(error){console.error(error);toast('Je n’arrive pas à charger ta fiche. Vérifie la connexion et la migration Supabase.');return undefined;}
+}
+function showProfileRecoveryMessage() {
+  toast('Une fiche existe déjà, mais sa session anonyme n’est pas reconnue. Ne la recrée pas : réutilise la session du navigateur qui l’a créée. Si ses données ont été effacées, cette session ne peut pas être récupérée automatiquement.');
+}
+async function openMyProfile() {
+  const profile=ownProfile||await refreshOwnProfile();
+  if(profile){showProfileDetails(profile);return;}
+  if(profile===undefined)return;
+  if(hasRecoverableProfileId()){showProfileRecoveryMessage();return;}
+  fillProfileForm(null);openDialog(profileDialog);
+}
+async function openProfileEditor() {
+  const profile=ownProfile||await refreshOwnProfile();
+  if(profile){fillProfileForm(profile);openDialog(profileDialog);return;}
+  if(profile===undefined)return;
+  if(hasRecoverableProfileId()){showProfileRecoveryMessage();return;}
+  fillProfileForm(null);openDialog(profileDialog);
 }
 
 function renderAutocomplete(container,features,onChoose) {
@@ -175,7 +206,7 @@ function attachAutocomplete(input,container,onChoose,kind) {
     if (kind === 'main') searchTimer = timer; else placeTimer = timer;
   });
 }
-function proposePublicPlace(feature) {
+async function proposePublicPlace(feature) {
   const item = featureData(feature), form = $('#host-form');
   form.reset();
   selectedHostResult = item;
@@ -183,7 +214,9 @@ function proposePublicPlace(feature) {
   $('#place-address').value = item.address;
   form.elements.lat.value = item.lat; form.elements.lng.value = item.lng; form.elements.department.value = item.department;
   $('#place-suggestions').hidden = true;
-  if(!ownProfile){pendingHostAfterProfile=true;toast('Crée ta fiche avant de proposer un lieu.');fillProfileForm(null);openDialog(profileDialog);return;}
+  const profile=ownProfile||await refreshOwnProfile();
+  if(profile===undefined)return;
+  if(!profile){if(hasRecoverableProfileId()){showProfileRecoveryMessage();return;}pendingHostAfterProfile=true;toast('Crée ta fiche avant de proposer un lieu.');fillProfileForm(null);openDialog(profileDialog);return;}
   pendingHostAfterProfile=false;openDialog(hostDialog);
 }
 function showPublicResult(feature) {
@@ -230,16 +263,16 @@ function cacheProfile(profile) {
 }
 async function loadPlaceOwnerProfile(place) {
   const slot=$('#place-owner');
-  if(!place?.owner_id){slot.innerHTML='';return;}
+  if(!place?.owner_id){slot.innerHTML='<p class="owner-profile-missing">La fiche de la personne qui a proposé ce lieu n’est pas reliée à cette entrée.</p>';return;}
   try {
     let profile;
     if(db){const {data,error}=await db.from('profiles').select('*').eq('owner_id',place.owner_id).maybeSingle();if(error)throw error;profile=data;}
     else profile=profiles.find(item=>item.owner_id===place.owner_id);
-    if(!profile){slot.innerHTML='';return;}
+    if(!profile){slot.innerHTML='<p class="owner-profile-missing">Fiche de la personne qui a proposé ce lieu indisponible.</p>';return;}
     cacheProfile(profile);
     slot.innerHTML=`<button type="button" class="profile-context-link" data-owner-profile="${escapeHtml(profile.id)}"><span class="profile-context-avatar">${escapeHtml(profile.nickname.slice(0,1).toUpperCase())}</span><span><b>Voir la fiche de ${escapeHtml(profile.nickname)}</b><small>${Number(profile.age)||'Âge non renseigné'}${Number(profile.age)?' ans':''} · ${escapeHtml(profile.study||profile.area||'Étudiant·e')}</small></span><span>↗</span></button>`;
     slot.querySelector('[data-owner-profile]').addEventListener('click',()=>showProfileDetails(profile));
-  } catch(error){console.error(error);slot.innerHTML='';}
+  } catch(error){console.error(error);slot.innerHTML='<p class="owner-profile-missing">Fiche non chargée. La migration Supabase doit être à jour.</p>';}
 }
 async function renderAttendance() {
   if (!detailPlace) return;
@@ -269,7 +302,11 @@ function placeAvailableOn(date,place) {
   return place.days.includes(days[dayIndex]);
 }
 async function toggleAttendance() {
-  if (!ownProfile) { pendingAttendanceAfterProfile=true;toast('Crée d’abord ta fiche ; ta présence sera enregistrée ensuite.');fillProfileForm(null);openDialog(profileDialog);return; }
+  if (!ownProfile) {
+    const profile=await refreshOwnProfile();
+    if(profile===undefined)return;
+    if(!profile){if(hasRecoverableProfileId()){showProfileRecoveryMessage();return;}pendingAttendanceAfterProfile=true;toast('Crée ta fiche une seule fois ; ta présence sera enregistrée ensuite.');fillProfileForm(null);openDialog(profileDialog);return;}
+  }
   const date=$('#attendance-date').value;
   const existing=currentAttendances.find(row=>String(row.profile_id)===String(ownProfile.id));
   if (!existing&&!placeAvailableOn(date,detailPlace)) { toast(detailPlace.days?.length?`Ce lieu indique plutôt : ${daysText(detailPlace.days)}.`:'Ce lieu n’a pas indiqué de jours disponibles.'); return; }
@@ -318,8 +355,9 @@ async function copyContact(contact) { try { await navigator.clipboard.writeText(
 
 function wireDialogs() {
   ['#open-host-intro','#open-host-map','#open-host-panel'].forEach(selector=>$(selector).addEventListener('click',startHostProposal));
-  ['#open-profile-top','#open-profile-main'].forEach(selector=>$(selector).addEventListener('click',()=>{fillProfileForm(ownProfile);openDialog(profileDialog);}));
-  $('#open-own-profile').addEventListener('click',()=>showProfileDetails(ownProfile));
+  $('#open-profile-top').addEventListener('click',openProfileEditor);
+  $('#open-profile-main').addEventListener('click',openProfileEditor);
+  $('#open-own-profile').addEventListener('click',openMyProfile);
   document.querySelectorAll('[data-close]').forEach(button=>button.addEventListener('click',()=>button.closest('dialog').close()));
   document.querySelectorAll('dialog').forEach(dialog=>dialog.addEventListener('click',event=>{if(event.target===dialog)dialog.close();}));
   $('#locate-button').addEventListener('click',()=>{
@@ -327,9 +365,11 @@ function wireDialogs() {
     navigator.geolocation.getCurrentPosition(position=>{map.flyTo([position.coords.latitude,position.coords.longitude],13);L.circleMarker([position.coords.latitude,position.coords.longitude],{radius:8,color:'#fff',weight:3,fillColor:'#76a88b',fillOpacity:1}).addTo(map).bindPopup('Ta position').openPopup();},()=>toast('Position non partagée. Tu peux explorer la carte manuellement.'),{timeout:8000});
   });
 }
-function startHostProposal() {
+async function startHostProposal() {
   selectedHostResult=null;$('#host-form').reset();
-  if(!ownProfile){pendingHostAfterProfile=true;toast('Crée ta fiche avant de proposer un lieu.');fillProfileForm(null);openDialog(profileDialog);return;}
+  const profile=ownProfile||await refreshOwnProfile();
+  if(profile===undefined)return;
+  if(!profile){if(hasRecoverableProfileId()){showProfileRecoveryMessage();return;}pendingHostAfterProfile=true;toast('Crée ta fiche une seule fois avant de proposer un lieu.');fillProfileForm(null);openDialog(profileDialog);return;}
   pendingHostAfterProfile=false;openDialog(hostDialog);
 }
 
