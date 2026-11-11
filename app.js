@@ -1,8 +1,10 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 const config = window.APP_CONFIG || {};
-const connected = Boolean(config.supabaseUrl && config.supabaseAnonKey);
-const db = connected ? createClient(config.supabaseUrl, config.supabaseAnonKey) : null;
+const rawSupabaseUrl = (config.supabaseUrl || '').trim();
+const supabaseUrl = /^https?:\/\//i.test(rawSupabaseUrl) ? rawSupabaseUrl : rawSupabaseUrl ? `https://${rawSupabaseUrl}.supabase.co` : '';
+const connected = Boolean(supabaseUrl && config.supabaseAnonKey);
+const db = connected ? createClient(supabaseUrl, config.supabaseAnonKey) : null;
 const demoPlaces = [
   {id:'demo-1',name:'La Verrière des Arts',address:'18 rue des Fossés Saint-Jacques, 5e',lat:48.8432,lng:2.3432,capacity:6,kind:'Café',days:['Mar','Jeu','Sam'],note:'Grande table au fond, prises à disposition. Consommation appréciée.',area:'center'},
   {id:'demo-2',name:'Bibliothèque Buffon',address:'15 rue Buffon, 5e',lat:48.8439,lng:2.3594,capacity:8,kind:'Bibliothèque',days:['Lun','Mer','Ven'],note:'Espaces de travail en groupe au premier étage.',area:'south'},
